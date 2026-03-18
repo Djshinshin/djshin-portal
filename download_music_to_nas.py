@@ -474,7 +474,7 @@ def download_beatport(url: str) -> subprocess.CompletedProcess[str]:
            "PATH": f"{VENV_BIN}:/Users/shinba/bin:{os.environ.get('PATH', '')}"}
     return subprocess.run(
         [str(BEATPORTDL), url],
-        input=url + "\n\n",          # 非互動式 stdin pipe
+        input=url + "\nq\n",        # q 退出 beatportdl 互動迴圈
         capture_output=True,
         text=True,
         timeout=1800,
