@@ -342,7 +342,15 @@ def reconcile_apple_music_files(
 def ensure_storage_file(path: Path, info: dict[str, Any],
                         platform: str) -> tuple[Path, str]:
     label = storage_format_label(info, platform)
-    if label in ("ALAC", "M4A"):
+    # ALAC → 轉 FLAC
+    if label == "ALAC":
+        output = path.with_suffix(".flac")
+        result = run(["ffmpeg", "-y", "-i", str(path), "-c:a", "flac", str(output)], timeout=1800)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "ffmpeg ALAC→FLAC convert failed")
+        path.unlink(missing_ok=True)
+        return output, "FLAC"
+    if label == "M4A":
         return path, label
     if path.suffix.lower() == ".flac":
         return path, "FLAC"
