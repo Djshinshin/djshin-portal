@@ -580,33 +580,37 @@ def download_query(query: str) -> dict[str, Any]:
                     tidal_temp = Path(tempfile.mkdtemp(
                         prefix="music-tidal-fb-", dir=str(STATE_DIR)
                     ))
-                    try:
-                        tidal_result = download_tidal(tidal_query, tidal_temp)
-                        tidal_files  = [
-                            p for p in tidal_temp.rglob("*")
-                            if p.is_file()
-                            and p.suffix.lower() in {".flac", ".wav", ".aiff", ".aif"}
-                            and not p.name.startswith(".")
-                            and not p.name.startswith("._")
-                        ]
-                        result_payload["exit_code"]   = tidal_result.returncode
-                        result_payload["output_tail"] = clean_output(
-                            (tidal_result.stdout or "") + "\n" + (tidal_result.stderr or "")
-                        )[-1200:]
-                        if tidal_result.returncode not in (0, 1) and not tidal_files:
-                            raise RuntimeError(
-                                result_payload["output_tail"] or "Tidal fallback 下載失敗"
-                            )
-                        if not tidal_files:
-                            raise RuntimeError(
-                                result_payload["output_tail"] or "Tidal fallback：無 FLAC 檔案"
-                            )
-                        platform   = "Tidal"
-                        audio_files = tidal_files
-                        result_payload["provider"]          = "tidal_fallback"
-                        result_payload["tidal_fallback_query"] = tidal_query
-                    finally:
-                        shutil.rmtree(tidal_temp, ignore_errors=True)
+                    tidal_result = download_tidal(tidal_query, tidal_temp)
+                    tidal_files  = [
+                        p for p in tidal_temp.rglob("*")
+                        if p.is_file()
+                        and p.suffix.lower() in {".flac", ".wav", ".aiff", ".aif"}
+                        and not p.name.startswith(".")
+                        and not p.name.startswith("._")
+                    ]
+                    result_payload["exit_code"]   = tidal_result.returncode
+                    result_payload["output_tail"] = clean_output(
+                        (tidal_result.stdout or "") + "\n" + (tidal_result.stderr or "")
+                    )[-1200:]
+                    if tidal_result.returncode not in (0, 1) and not tidal_files:
+                        raise RuntimeError(
+                            result_payload["output_tail"] or "Tidal fallback 下載失敗"
+                        )
+                    if not tidal_files:
+                        raise RuntimeError(
+                            result_payload["output_tail"] or "Tidal fallback：無 FLAC 檔案"
+                        )
+                    # 把 Tidal 檔案 move 到外層 temp_dir，避免 tidal_temp 被清除後路徑失效
+                    moved_files: list[Path] = []
+                    for src in tidal_files:
+                        dst = temp_dir / src.name
+                        shutil.move(str(src), str(dst))
+                        moved_files.append(dst)
+                    shutil.rmtree(tidal_temp, ignore_errors=True)
+                    platform    = "Tidal"
+                    audio_files = moved_files
+                    result_payload["provider"]             = "tidal_fallback"
+                    result_payload["tidal_fallback_query"] = tidal_query
                 else:
                     raise
 
