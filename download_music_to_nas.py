@@ -480,11 +480,10 @@ def download_beatport(url: str) -> subprocess.CompletedProcess[str]:
 def download_apple_music(url: str, temp_dir: Path) -> subprocess.CompletedProcess[str]:
     temp_dir.mkdir(parents=True, exist_ok=True)
     return run(
-        [str(VENV_BIN / "gamdl"), "--no-config-file", url,
-         "-c", str(COOKIES), "-o", str(temp_dir),
-         "--download-mode", "ytdlp",
-         "--temp-path", str(temp_dir), "--overwrite",
-         "--song-codec-priority", "alac,aac-he,aac"],
+        [str(VENV_BIN / "gamdl"), url,
+         "-o", str(temp_dir),
+         "--temp-path", str(temp_dir),
+         "--overwrite"],
         timeout=2400,
     )
 
