@@ -351,37 +351,44 @@ def convert_to_flac_copy(src: Path) -> Path | None:
     return None
 
 
-# ── Downloader via download_music_to_nas.py ───────────────────────────────────
+# ── Downloader via Portal /api/download (iMac 執行) ──────────────────────────
 
 def run_download_script(url: str) -> dict:
     """
-    呼叫 download_music_to_nas.py --manual-request {url}，
-    回傳 JSON payload。成功時 payload['success'] == True。
+    透過 Portal /api/download 在 iMac 上執行下載。
+    成功時 payload['success'] == True。
     """
-    if not DOWNLOAD_SCRIPT.exists():
-        return {"success": False, "error": f"找不到 {DOWNLOAD_SCRIPT}"}
-    py = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
-    env = {**os.environ,
-           "PATH": f"{VENV_BIN}:/opt/homebrew/bin:/usr/local/bin:{os.environ.get('PATH','')}",
-           "/Users/shinba/bin": os.environ.get("PATH", "")}
-    # 修正 PATH 格式
-    env["PATH"] = f"{VENV_BIN}:/opt/homebrew/bin:/usr/local/bin:{os.environ.get('PATH','')}"
-    try:
-        r = subprocess.run(
-            [py, str(DOWNLOAD_SCRIPT), "--manual-request", url],
-            capture_output=True, text=True, timeout=1800, env=env,
+    global _portal_cookie
+    ctx = ssl._create_unverified_context()
+    body = json.dumps({"url": url}).encode()
+
+    for attempt in range(2):
+        if not _portal_cookie:
+            portal_login()
+        if not _portal_cookie:
+            return {"success": False, "error": "Portal login 失敗"}
+        req = urllib.request.Request(
+            f"{PORTAL_BASE}/music/api/download",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Cookie":       _portal_cookie,
+                "User-Agent":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+            },
+            method="POST",
         )
-        # 最後一行應為 JSON
-        for line in reversed((r.stdout or "").splitlines()):
-            line = line.strip()
-            if line.startswith("{") and '"success"' in line:
-                try:
-                    return json.loads(line)
-                except Exception:
-                    pass
-        return {"success": False, "error": r.stdout[-500:] or r.stderr[-500:] or "no output"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        try:
+            with urlopen(req, context=ctx, timeout=1850) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 403 and attempt == 0:
+                _portal_cookie = ""
+                portal_login()
+                continue
+            return {"success": False, "error": f"HTTP {e.code}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "Portal download 失敗"}
 
 
 # ── Scanner ───────────────────────────────────────────────────────────────────

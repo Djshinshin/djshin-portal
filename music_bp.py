@@ -259,6 +259,47 @@ def stream_download():
     )
 
 
+# ── 同步下載 API（供 MBP flac-upgrade-engine 呼叫）────────────────────────────
+@music_bp.route("/api/download", methods=["POST"])
+@music_auth_required
+def api_download():
+    """
+    POST JSON: {"url": "..."}  或  {"query": "..."}
+    在 iMac 上執行 download_music_to_nas.py --manual-request，
+    等待完成後回傳 JSON: {"success": bool, "files": [...], "error": "..."}
+    timeout 1800s。
+    """
+    data = request.json or {}
+    url = (data.get("url") or data.get("query") or "").strip()
+    if not url:
+        return jsonify({"success": False, "error": "缺少 url/query"}), 400
+
+    cmd = [str(MUSIC_VENV_PYTHON), str(DOWNLOAD_SCRIPT), "--manual-request", url]
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        output = (r.stdout or "") + (r.stderr or "")
+        # 從輸出最後找 JSON 結果行
+        for line in reversed(output.splitlines()):
+            line = line.strip()
+            if line.startswith("{") and '"success"' in line:
+                try:
+                    return jsonify(json.loads(line))
+                except Exception:
+                    pass
+        # 沒找到 JSON：用 returncode 判斷
+        ok = r.returncode in (0, 1)
+        return jsonify({"success": ok, "error": output[-500:] if not ok else ""})
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "error": "下載逾時 1800s"}), 504
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── 版本查詢 ──────────────────────────────────────────────────────────────────
 @music_bp.route("/api/versions")
 @music_auth_required
