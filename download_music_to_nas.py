@@ -256,14 +256,13 @@ def infer_genre(info: dict[str, Any]) -> str:
 def storage_format_label(info: dict[str, Any], platform: str) -> str:
     codec = str(info.get("codec") or "").lower()
     ext   = str(info.get("ext") or "").lower()
-    if platform.strip().lower() == "apple music":
-        if codec == "alac":
-            return "ALAC"
-        raise RuntimeError("Apple Music 未取得 ALAC，已拒絕保存")
     if codec == "alac" or ext == ".alac":
         return "ALAC"
     if codec == "flac" or ext == ".flac":
         return "FLAC"
+    # AAC/M4A 保留原格式，不強迫拒絕
+    if ext in (".m4a", ".mp4") or codec in ("aac", "aac_latm"):
+        return "M4A"
     return "FLAC"
 
 
@@ -311,9 +310,11 @@ def reconcile_apple_music_files(
             f"Apple Music 單曲驗證失敗：預期 1 個檔案，實際 {len(audio_files)} 個"
         )
     info = ffprobe_info(audio_files[0])
-    if str(info.get("codec") or "").lower() != "alac":
+    codec = str(info.get("codec") or "").lower()
+    # ALAC = 真正無損； AAC = 有損但仍保存（部分曲目 Apple Music 只有 AAC）
+    if codec not in ("alac", "aac", "aac_latm"):
         raise RuntimeError(
-            f"Apple Music 未取得 ALAC，實際 codec={info.get('codec') or 'unknown'}，已拒絕保存"
+            f"Apple Music 未取得預期格式，實際 codec={codec}，已拒絕保存"
         )
     expected_duration = float(expected.get("duration") or 0)
     actual_duration   = float(info.get("duration") or 0)
