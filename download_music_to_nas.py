@@ -543,9 +543,55 @@ def download_query(query: str) -> dict[str, Any]:
             raise RuntimeError(result_payload["output_tail"] or "沒有找到可整理的 FLAC/無損檔案")
 
         if provider == "apple_music":
-            result_payload["apple_validation"] = reconcile_apple_music_files(
-                audio_files, apple_expected
-            )
+            try:
+                result_payload["apple_validation"] = reconcile_apple_music_files(
+                    audio_files, apple_expected
+                )
+            except RuntimeError as aac_err:
+                err_msg = str(aac_err)
+                # AAC（有損）→ 自動 fallback Tidal 搜尋無損 FLAC
+                if "有損" in err_msg or "AAC" in err_msg.upper():
+                    result_payload["apple_aac_fallback"] = err_msg
+                    tidal_query = (
+                        f"{apple_expected.get('artist', '')} "
+                        f"{apple_expected.get('title', '')}"
+                    ).strip() if apple_expected else query
+                    # 清除 Apple Music 下載的 AAC 殘留
+                    for p in audio_files:
+                        p.unlink(missing_ok=True)
+                    # 新 temp_dir 給 Tidal
+                    tidal_temp = Path(tempfile.mkdtemp(
+                        prefix="music-tidal-fb-", dir=str(STATE_DIR)
+                    ))
+                    try:
+                        tidal_result = download_tidal(tidal_query, tidal_temp)
+                        tidal_files  = [
+                            p for p in tidal_temp.rglob("*")
+                            if p.is_file()
+                            and p.suffix.lower() in {".flac", ".wav", ".aiff", ".aif"}
+                            and not p.name.startswith(".")
+                            and not p.name.startswith("._")
+                        ]
+                        result_payload["exit_code"]   = tidal_result.returncode
+                        result_payload["output_tail"] = clean_output(
+                            (tidal_result.stdout or "") + "\n" + (tidal_result.stderr or "")
+                        )[-1200:]
+                        if tidal_result.returncode not in (0, 1) and not tidal_files:
+                            raise RuntimeError(
+                                result_payload["output_tail"] or "Tidal fallback 下載失敗"
+                            )
+                        if not tidal_files:
+                            raise RuntimeError(
+                                result_payload["output_tail"] or "Tidal fallback：無 FLAC 檔案"
+                            )
+                        platform   = "Tidal"
+                        audio_files = tidal_files
+                        result_payload["provider"]          = "tidal_fallback"
+                        result_payload["tidal_fallback_query"] = tidal_query
+                    finally:
+                        shutil.rmtree(tidal_temp, ignore_errors=True)
+                else:
+                    raise
 
         flac_mode = os.environ.get("FLAC_UPGRADE_MODE", "0") == "1"
         organized = [organize_file(p, platform, flac_upgrade=flac_mode) for p in audio_files]
