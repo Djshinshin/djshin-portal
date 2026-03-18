@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DJ Shin — Music</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;
+  --panel:#111827;
+  --card:#1a2332;
+  --border:rgba(255,255,255,0.07);
+  --accent:#ff6b9d;
+  --accent2:#00d4aa;
+  --text:#e8eaed;
+  --muted:#6b7280;
+  --success:#4ecca3;
+  --error:#ff6b6b;
+  --warn:#f5a623;
+}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;
+  padding-bottom:40px;
+}
+
+/* ── Header ── */
+.header{
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  padding:14px 20px;
+  display:flex;align-items:center;gap:12px;
+  position:sticky;top:0;z-index:50;
+}
+.header a{color:var(--muted);text-decoration:none;font-size:20px;line-height:1}
+.header h1{font-size:17px;font-weight:700;flex:1}
+.header .status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.header .status-dot.ok{background:var(--success)}
+.header .status-dot.busy{background:var(--warn);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Layout ── */
+.container{max-width:900px;margin:0 auto;padding:20px 16px;display:flex;flex-direction:column;gap:16px}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:4px;background:var(--panel);padding:6px;border-radius:12px;border:1px solid var(--border)}
+.tab-btn{
+  flex:1;padding:9px 6px;border:none;background:transparent;color:var(--muted);
+  border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;
+}
+.tab-btn.active{background:var(--card);color:var(--text)}
+.tab-btn:hover:not(.active){color:var(--text)}
+
+/* ── Panels ── */
+.tab-panel{display:none}
+.tab-panel.active{display:flex;flex-direction:column;gap:12px}
+
+/* ── Card ── */
+.card{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:14px;padding:18px;
+}
+.card-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
+
+/* ── Input row ── */
+.input-row{display:flex;gap:8px}
+.input-row input,.input-row select{
+  flex:1;padding:11px 14px;
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;color:var(--text);font-size:14px;outline:none;
+}
+.input-row input:focus,.input-row select:focus{border-color:var(--accent)}
+.input-row select option{background:var(--panel)}
+
+/* ── Buttons ── */
+.btn{
+  padding:11px 18px;border:none;border-radius:10px;
+  font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap;
+}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#e05585}
+.btn-secondary{background:var(--panel);border:1px solid var(--border);color:var(--text)}
+.btn-secondary:hover{border-color:rgba(255,255,255,.2)}
+.btn-success{background:#1a4a3a;border:1px solid var(--success);color:var(--success)}
+.btn-warn{background:#3a2a0a;border:1px solid var(--warn);color:var(--warn)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Genre strip ── */
+.genre-strip{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.genre-strip label{font-size:12px;color:var(--muted);white-space:nowrap}
+.genre-strip select{
+  padding:7px 12px;background:var(--panel);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:13px;outline:none;
+}
+.genre-strip select:focus{border-color:var(--accent)}
+.current-genre{font-size:12px;color:var(--accent);background:rgba(255,107,157,.1);
+  padding:3px 10px;border-radius:20px;border:1px solid rgba(255,107,157,.2)}
+
+/* ── Version cards ── */
+.ver-list{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+.ver-card{
+  display:flex;align-items:center;gap:12px;
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px;
+}
+.ver-card .num{
+  font-size:16px;font-weight:700;color:var(--accent);min-width:22px;text-align:center;
+}
+.ver-card .info{flex:1;min-width:0}
+.ver-card .label{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ver-card .meta{font-size:11px;color:var(--muted);margin-top:2px}
+.ver-card .pick-btn{
+  padding:5px 12px;font-size:12px;font-weight:600;
+  background:var(--panel);border:1px solid var(--accent);color:var(--accent);
+  border-radius:6px;cursor:pointer;white-space:nowrap;transition:all .2s;
+}
+.ver-card .pick-btn:hover{background:var(--accent);color:#fff}
+.ver-empty{color:var(--muted);font-size:13px;padding:12px 0}
+
+/* ── Library buttons ── */
+.lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.lib-btn{
+  padding:12px 8px;background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;color:var(--text);font-size:13px;font-weight:600;cursor:pointer;
+  text-align:center;transition:all .2s;
+}
+.lib-btn:hover{border-color:var(--accent2);color:var(--accent2)}
+.lib-btn:disabled{opacity:.4;cursor:not-allowed}
+.lib-btn .lib-icon{font-size:18px;margin-bottom:4px}
+
+/* ── Output pane ── */
+.output-wrap{position:relative}
+.output-header{
+  display:flex;align-items:center;gap:8px;margin-bottom:6px;
+}
+.output-header .label{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;flex:1}
+.output-header .clear-btn{
+  font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;padding:2px 6px;
+  border-radius:4px;
+}
+.output-header .clear-btn:hover{color:var(--text);background:rgba(255,255,255,.06)}
+.output{
+  background:#0d1117;border:1px solid var(--border);border-radius:10px;
+  padding:12px;height:280px;overflow-y:auto;
+  font-family:'JetBrains Mono','Menlo','Monaco','Courier New',monospace;font-size:12px;line-height:1.6;
+  white-space:pre-wrap;word-break:break-all;
+}
+.output .line-ok{color:var(--success)}
+.output .line-err{color:var(--error)}
+.output .line-warn{color:var(--warn)}
+.output .line-phase{color:var(--accent);font-weight:700}
+.output .line-sep{color:#2a3a4a}
+.output .line-muted{color:var(--muted)}
+
+/* ── Progress bar ── */
+.progress{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:8px}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0;transition:width .3s}
+.progress-bar.indeterminate{width:100%;animation:indeterminate 1.4s ease infinite}
+@keyframes indeterminate{
+  0%{transform:translateX(-100%)}
+  100%{transform:translateX(100%)}
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── Back link ── */
+.back-link{color:var(--muted);text-decoration:none;font-size:13px;display:inline-flex;align-items:center;gap:4px}
+.back-link:hover{color:var(--text)}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a href="/" title="返回">←</a>
+  <h1>🎵 DJ Music</h1>
+  <div class="status-dot" id="statusDot"></div>
+</div>
+
+<div class="container">
+
+  <!-- Genre strip -->
+  <div class="card">
+    <div class="genre-strip">
+      <label>預設曲風</label>
+      <select id="genreSelect" onchange="setGenre(this.value)">
+        <option value="">自動判斷</option>
+        <option>Afro House</option><option>Deep House</option><option>Tech House</option>
+        <option>House</option><option>Techno</option><option>Melodic Techno</option>
+        <option>Progressive House</option><option>Minimal</option><option>Trance</option>
+        <option>Drum & Bass</option><option>Ambient</option><option>Nu-Disco</option>
+        <option>Funk</option><option>Hip-Hop</option><option>R&B</option>
+        <option>Pop</option><option>Electronic</option>
+      </select>
+      <span class="current-genre" id="currentGenre" style="display:none"></span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('download', this)">下載</button>
+    <button class="tab-btn" onclick="switchTab('versions', this)">版本</button>
+    <button class="tab-btn" onclick="switchTab('analyze', this)">Analyze</button>
+    <button class="tab-btn" onclick="switchTab('one', this)">一鍵</button>
+    <button class="tab-btn" onclick="switchTab('library', this)">Library</button>
+    <button class="tab-btn" onclick="switchTab('flac', this)">FLAC</button>
+  </div>
+
+  <!-- ── 下載 tab ── -->
+  <div class="tab-panel active" id="tab-download">
+    <div class="card">
+      <div class="card-title">貼上連結或輸入歌名</div>
+      <div class="input-row">
+        <input type="text" id="dlInput" placeholder="Beatport / TIDAL / Apple Music 連結，或「歌手 - 歌名」"
+               onkeydown="if(event.key==='Enter')startDownload()">
+        <button class="btn btn-primary" id="dlBtn" onclick="startDownload()">下載</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 版本 tab ── -->
+  <div class="tab-panel" id="tab-versions">
+    <div class="card">
+      <div class="card-title">版本查詢</div>
+      <div class="input-row">
+        <input type="text" id="verInput" placeholder="歌手 - 歌名（例：Peggy Gou - Rocksteady）"
+               onkeydown="if(event.key==='Enter')searchVersions()">
+        <button class="btn btn-primary" id="verBtn" onclick="searchVersions()">查詢</button>
+      </div>
+    </div>
+    <div class="card" id="verResultCard" style="display:none">
+      <div class="card-title" id="verResultTitle">版本列表</div>
+      <div class="ver-list" id="verList"></div>
+    </div>
+  </div>
+
+  <!-- ── Analyze tab ── -->
+  <div class="tab-panel" id="tab-analyze">
+    <div class="card">
+      <div class="card-title">送往 Mixed In Key 11 分析</div>
+      <div class="input-row">
+        <input type="text" id="analyzeGenre" placeholder="曲風（留空自動判斷）">
+        <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalyze()">執行 Analyze</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 一鍵 tab ── -->
+  <div class="tab-panel" id="tab-one">
+    <div class="card">
+      <div class="card-title">一鍵流程（下載 + Analyze）</div>
+      <div class="input-row">
+        <input type="text" id="oneInput" placeholder="曲風 | 歌手 - 歌名，或直接輸入歌手 - 歌名"
+               onkeydown="if(event.key==='Enter')startOne()">
+        <button class="btn btn-primary" id="oneBtn" onclick="startOne()">執行</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Library tab ── -->
+  <div class="tab-panel" id="tab-library">
+    <div class="card">
+      <div class="card-title">Library Manager</div>
+      <div class="lib-grid">
+        <button class="lib-btn" onclick="runLibrary('status')">
+          <div class="lib-icon">📊</div>狀態
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-scan')">
+          <div class="lib-icon">🔍</div>掃描
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-health')">
+          <div class="lib-icon">🏥</div>健康檢查
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-compare')">
+          <div class="lib-icon">⚖️</div>品質比對
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-queue')">
+          <div class="lib-icon">📋</div>建立佇列
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-dispatch')">
+          <div class="lib-icon">🚀</div>派發任務
+        </button>
+        <button class="lib-btn" onclick="runLibrary('logs')">
+          <div class="lib-icon">📜</div>查看日誌
+        </button>
+        <button class="lib-btn" onclick="runLibrary('run-dedup')">
+          <div class="lib-icon">🔎</div>指紋重複
+        </button>
+        <button class="lib-btn" onclick="runLibraryCheck()">
+          <div class="lib-icon">🎯</div>新歌比對
+        </button>
+      </div>
+    </div>
+    <div class="card" id="checkCard" style="display:none">
+      <div class="card-title">新歌比對（輸入 MBP 上的檔案路徑）</div>
+      <div class="input-row">
+        <input type="text" id="checkInput" placeholder="/Volumes/Shin-Music/放歌專用/xxx.flac"
+               onkeydown="if(event.key==='Enter')submitCheck()">
+        <button class="btn btn-primary" id="checkBtn" onclick="submitCheck()">比對</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FLAC tab ── -->
+  <div class="tab-panel" id="tab-flac">
+    <div class="card">
+      <div class="card-title">FLAC 升級引擎</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+        來源目錄：<code style="color:var(--text)">/Volumes/Shin-Music/放歌專用</code><br>
+        掃描並升級至 FLAC 後上傳 Dropbox
+      </p>
+      <div class="input-row">
+        <button class="btn btn-primary" id="flacBtn" onclick="startFlac(false)">執行升級</button>
+        <button class="btn btn-secondary" id="flacDryBtn" onclick="startFlac(true)">Dry Run（預覽）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Output ── -->
+  <div class="output-wrap">
+    <div class="output-header">
+      <span class="label" id="outputLabel">輸出</span>
+      <button class="clear-btn" onclick="clearOutput()">清除</button>
+    </div>
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="output" id="output"></div>
+  </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let busy = false;
+let currentSSE = null;
+let lastVersions = [];
+
+// Init
+async function init() {
+  try {
+    const r = await fetch('/music/api/state');
+    const s = await r.json();
+    lastVersions = s.last_versions || [];
+    const g = s.genre || '';
+    if (g) {
+      document.getElementById('genreSelect').value = g;
+      showCurrentGenre(g);
+    }
+  } catch(e) {}
+}
+init();
+
+// ── Genre ──────────────────────────────────────────────────────────────────
+async function setGenre(g) {
+  await fetch('/music/api/genre', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({genre: g})
+  });
+  showCurrentGenre(g);
+}
+function showCurrentGenre(g) {
+  const el = document.getElementById('currentGenre');
+  if (g) { el.textContent = g; el.style.display = ''; }
+  else { el.style.display = 'none'; }
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Output ─────────────────────────────────────────────────────────────────
+const outputEl = document.getElementById('output');
+
+function appendLine(text, cls = '') {
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  outputEl.appendChild(div);
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+function appendSep() {
+  appendLine('─'.repeat(56), 'line-sep');
+}
+function clearOutput() {
+  outputEl.innerHTML = '';
+}
+function setLabel(text) {
+  document.getElementById('outputLabel').textContent = text;
+}
+function setBusy(b) {
+  busy = b;
+  document.getElementById('statusDot').className = 'status-dot' + (b ? ' busy' : ' ok');
+  const bar = document.getElementById('progressBar');
+  if (b) {
+    bar.style.width = '';
+    bar.classList.add('indeterminate');
+  } else {
+    bar.classList.remove('indeterminate');
+    bar.style.width = '0';
+  }
+  // disable all action buttons
+  document.querySelectorAll('.btn-primary, .btn-secondary, .lib-btn').forEach(el => {
+    el.disabled = b;
+  });
+}
+function startOutput(label) {
+  clearOutput();
+  setLabel(label);
+  appendLine('▶ ' + label, 'line-phase');
+  appendLine(new Date().toLocaleTimeString('zh-TW'), 'line-muted');
+  appendSep();
+  setBusy(true);
+  if (currentSSE) { currentSSE.close(); currentSSE = null; }
+}
+function finishOutput(ok) {
+  appendSep();
+  if (ok) appendLine('✓ 完成', 'line-ok');
+  else appendLine('✗ 失敗', 'line-err');
+  setBusy(false);
+}
+
+// ── SSE helper ─────────────────────────────────────────────────────────────
+function openSSE(url, onDone) {
+  const es = new EventSource(url);
+  currentSSE = es;
+
+  es.addEventListener('start', () => {});
+  es.addEventListener('phase', e => {
+    const d = JSON.parse(e.data);
+    appendLine('── ' + d.text + ' ──', 'line-phase');
+  });
+  es.addEventListener('line', e => {
+    const d = JSON.parse(e.data);
+    const t = d.text || '';
+    let cls = '';
+    if (/error|fail|失敗|錯誤/i.test(t)) cls = 'line-err';
+    else if (/warn|warning/i.test(t)) cls = 'line-warn';
+    else if (/ok|success|完成|成功/i.test(t)) cls = 'line-ok';
+    appendLine(t, cls);
+  });
+  es.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    es.close();
+    currentSSE = null;
+    if (onDone) onDone(d);
+    finishOutput(d.ok);
+  });
+  es.addEventListener('error', e => {
+    try {
+      const d = JSON.parse(e.data);
+      appendLine('錯誤: ' + d.text, 'line-err');
+    } catch(_) {}
+    es.close();
+    currentSSE = null;
+    setBusy(false);
+  });
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      setBusy(false);
+    }
+  };
+  return es;
+}
+
+// ── 下載 ───────────────────────────────────────────────────────────────────
+function startDownload() {
+  const q = document.getElementById('dlInput').value.trim();
+  if (!q || busy) return;
+  startOutput('下載: ' + q);
+  openSSE('/music/stream/download?q=' + encodeURIComponent(q));
+}
+
+// ── 版本查詢 ───────────────────────────────────────────────────────────────
+async function searchVersions() {
+  const q = document.getElementById('verInput').value.trim();
+  if (!q || busy) return;
+  startOutput('版本查詢: ' + q);
+  setBusy(true);
+
+  try {
+    const r = await fetch('/music/api/versions?q=' + encodeURIComponent(q));
+    const data = await r.json();
+    setBusy(false);
+    appendSep();
+
+    if (!data.ok) {
+      appendLine('查詢失敗: ' + (data.error || ''), 'line-err');
+      finishOutput(false);
+      return;
+    }
+
+    lastVersions = data.items || [];
+    renderVersions(data.items, data.query);
+    appendLine(`找到 ${data.items.length} 個版本`, 'line-ok');
+    finishOutput(true);
+  } catch(e) {
+    appendLine('連線錯誤: ' + e.message, 'line-err');
+    setBusy(false);
+    finishOutput(false);
+  }
+}
+
+function renderVersions(items, query) {
+  const card = document.getElementById('verResultCard');
+  const list = document.getElementById('verList');
+  const title = document.getElementById('verResultTitle');
+  title.textContent = `版本列表：${query}（${items.length} 個）`;
+  list.innerHTML = '';
+
+  if (!items.length) {
+    list.innerHTML = '<div class="ver-empty">無結果</div>';
+    card.style.display = '';
+    return;
+  }
+
+  items.forEach((item, i) => {
+    const idx = i + 1;
+    const div = document.createElement('div');
+    div.className = 'ver-card';
+    const meta = [item.provider, item.quality, item.release].filter(Boolean).join(' · ');
+    div.innerHTML = `
+      <div class="num">${idx}</div>
+      <div class="info">
+        <div class="label">${escHtml(item.label || '')}</div>
+        ${meta ? `<div class="meta">${escHtml(meta)}</div>` : ''}
+      </div>
+      <button class="pick-btn" onclick="pickVersion(${idx})">Pick #${idx}</button>
+    `;
+    list.appendChild(div);
+  });
+  card.style.display = '';
+}
+
+function pickVersion(n) {
+  if (busy) return;
+  startOutput(`Pick #${n}`);
+  switchTab('versions', document.querySelectorAll('.tab-btn')[1]);
+  openSSE('/music/stream/pick?n=' + n);
+}
+
+// ── Analyze ────────────────────────────────────────────────────────────────
+function startAnalyze() {
+  if (busy) return;
+  const g = document.getElementById('analyzeGenre').value.trim();
+  startOutput('Analyze' + (g ? ` [${g}]` : ' [自動判斷]'));
+  openSSE('/music/stream/analyze' + (g ? '?genre=' + encodeURIComponent(g) : ''));
+}
+
+// ── 一鍵 ───────────────────────────────────────────────────────────────────
+function startOne() {
+  const q = document.getElementById('oneInput').value.trim();
+  if (!q || busy) return;
+  startOutput('一鍵流程: ' + q);
+  openSSE('/music/stream/one?q=' + encodeURIComponent(q));
+}
+
+// ── Library ────────────────────────────────────────────────────────────────
+const libLabels = {
+  'status': '狀態', 'run-scan': '掃描', 'run-health': '健康檢查',
+  'run-compare': '品質比對', 'run-queue': '建立佇列',
+  'run-dispatch': '派發任務', 'logs': '日誌',
+  'run-dedup': '指紋重複比對', 'run-check': '新歌比對'
+};
+function runLibrary(cmd) {
+  if (busy) return;
+  startOutput('Library: ' + (libLabels[cmd] || cmd));
+  openSSE('/music/stream/library/' + cmd);
+}
+function runLibraryCheck() {
+  const card = document.getElementById('checkCard');
+  card.style.display = card.style.display === 'none' ? '' : 'none';
+}
+function submitCheck() {
+  const q = document.getElementById('checkInput').value.trim();
+  if (!q || busy) return;
+  document.getElementById('checkCard').style.display = 'none';
+  startOutput('新歌比對: ' + q);
+  openSSE('/music/stream/library/run-check?q=' + encodeURIComponent(q));
+}
+
+// ── FLAC ───────────────────────────────────────────────────────────────────
+function startFlac(dry) {
+  if (busy) return;
+  startOutput('FLAC 升級' + (dry ? '（Dry Run）' : ''));
+  openSSE('/music/stream/flac' + (dry ? '?dry=1' : ''));
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
