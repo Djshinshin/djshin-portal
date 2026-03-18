@@ -316,11 +316,48 @@ def stream_library(command: str):
 
     def generate():
         timeout = MANAGER_TIMEOUTS.get(command, 300)
-        # 透過 Tailscale SSH 在 MBP 執行 manager 腳本
-        remote = f"/bin/bash {MBP_MANAGER} {command}"
-        cmd = ssh_cmd(remote)
-        yield _sse("line", {"text": f"[SSH→MBP] {remote}"})
-        yield from run_stream(cmd, timeout=timeout)
+
+        if command in ("run-scan", "status"):
+            # 透過 SSH 在 MBP 執行掃描腳本
+            scan_script = r"""
+import os, collections
+root = '/Volumes/Shin-Music/放歌專用'
+exts = collections.Counter()
+non_flac = []
+total_size = 0
+total_files = 0
+for dirpath, dirs, files in os.walk(root):
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext in ('.flac','.mp3','.m4a','.aiff','.wav','.aif','.ogg','.alac'):
+            fp = os.path.join(dirpath, f)
+            sz = os.path.getsize(fp)
+            total_size += sz
+            total_files += 1
+            exts[ext] += 1
+            if ext != '.flac':
+                non_flac.append(f)
+print(f'掃描路徑: {root}')
+print(f'總檔案數: {total_files}')
+print(f'總容量: {total_size/1024/1024/1024:.2f} GB')
+print('\n格式分佈:')
+for ext, cnt in sorted(exts.items(), key=lambda x: -x[1]):
+    print(f'  {ext}: {cnt} 個')
+print(f'\n非 FLAC 檔案: {len(non_flac)} 個')
+if non_flac:
+    print('需升級清單 (前50筆):')
+    for fn in non_flac[:50]:
+        print(f'  {fn}')
+"""
+            import base64
+            b64 = base64.b64encode(scan_script.encode('utf-8')).decode()
+            remote = f"python3 -c \"import base64,sys; exec(base64.b64decode('{b64}').decode())\""
+            cmd = ssh_cmd(remote)
+            yield _sse("line", {"text": f"[SSH→MBP] 掃描 {SHIN_MUSIC_DIR}"})
+            yield from run_stream(cmd, timeout=timeout)
+        else:
+            yield _sse("line", {"text": f"指令 '{command}' 尚未實作"})
+            yield _sse("done", {"code": 0, "ok": True})
 
     return Response(
         stream_with_context(generate()),
