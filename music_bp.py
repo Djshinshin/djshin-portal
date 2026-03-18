@@ -757,7 +757,7 @@ def _run_long(key: str, cmd: list[str], timeout: int,
             stripped = line.rstrip()
             if stripped:
                 if progress_re:
-                    m = re.search(progress_re, stripped)
+                    m = _re.search(progress_re, stripped)
                     if m:
                         cur   = int(m.group(1))
                         total = int(m.group(2))
