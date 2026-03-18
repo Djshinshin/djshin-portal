@@ -317,7 +317,81 @@ def stream_library(command: str):
     def generate():
         timeout = MANAGER_TIMEOUTS.get(command, 300)
 
-        if command in ("run-scan", "status"):
+        if command == "status":
+            status_script = r"""
+import sqlite3, os
+DB = '/Users/shinchen/Library/Application Support/Lexicon/main.db'
+db = sqlite3.connect(DB)
+
+# 基本統計
+total = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0').fetchone()[0]
+playlists = db.execute('SELECT COUNT(*) FROM Playlist').fetchone()[0]
+total_dur = db.execute('SELECT SUM(duration) FROM Track WHERE archived=0').fetchone()[0] or 0
+days = total_dur // 86400
+hours = (total_dur % 86400) // 3600
+
+# Healthy tracks (有 BPM + Key + Genre + 至少一個 CUE)
+has_bpm = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0 AND bpm>0').fetchone()[0]
+has_key = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND key!='' AND key IS NOT NULL").fetchone()[0]
+has_genre = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND genre!='' AND genre IS NOT NULL").fetchone()[0]
+has_cue = db.execute('SELECT COUNT(DISTINCT trackId) FROM Cuepoint').fetchone()[0]
+no_bpm = total - has_bpm
+no_key = total - has_key
+no_genre = total - has_genre
+no_cue = total - has_cue
+
+# Healthy = 有 bpm + key + cue
+healthy = db.execute('''
+  SELECT COUNT(*) FROM Track t WHERE t.archived=0 AND t.bpm>0
+  AND t.key!='' AND t.key IS NOT NULL
+  AND EXISTS (SELECT 1 FROM Cuepoint c WHERE c.trackId=t.id)
+''').fetchone()[0]
+healthy_pct = round(healthy/total*100, 1) if total else 0
+
+# 曲風分佈 top 10
+genres = db.execute("SELECT genre, COUNT(*) as c FROM Track WHERE archived=0 AND genre!='' GROUP BY genre ORDER BY c DESC LIMIT 10").fetchall()
+
+# BPM 區間
+dist_bpm = db.execute('''
+  SELECT
+    SUM(CASE WHEN bpm>=60 AND bpm<90 THEN 1 ELSE 0 END) as d60,
+    SUM(CASE WHEN bpm>=90 AND bpm<110 THEN 1 ELSE 0 END) as d90,
+    SUM(CASE WHEN bpm>=110 AND bpm<120 THEN 1 ELSE 0 END) as d110,
+    SUM(CASE WHEN bpm>=120 AND bpm<130 THEN 1 ELSE 0 END) as d120,
+    SUM(CASE WHEN bpm>=130 AND bpm<140 THEN 1 ELSE 0 END) as d130,
+    SUM(CASE WHEN bpm>=140 THEN 1 ELSE 0 END) as d140
+  FROM Track WHERE archived=0 AND bpm>0
+''').fetchone()
+
+print('='*50)
+print(f'  TRACKS        {total:>8,}')
+print(f'  PLAYLISTS     {playlists:>8,}')
+print(f'  TOTAL PLAYTIME  {days}d {hours}h')
+print(f'  HEALTHY       {healthy_pct:>7}%  ({healthy:,}/{total:,})')
+print('='*50)
+print(f'\n分析狀態:')
+print(f'  有 BPM        {has_bpm:>7,}  \u7f3a {no_bpm:,}')
+print(f'  有 Key        {has_key:>7,}  \u7f3a {no_key:,}')
+print(f'  有 Genre      {has_genre:>7,}  \u7f3a {no_genre:,}')
+print(f'  有 CUE 點     {has_cue:>7,}  \u7f3a {no_cue:,}')
+print(f'\nBPM 分佈:')
+labels = ['60-89','90-109','110-119','120-129','130-139','140+']
+for lbl, cnt in zip(labels, dist_bpm):
+    bar = '\u2588' * min(int((cnt or 0)/max(dist_bpm)*30),30) if max(dist_bpm) else ''
+    print(f'  {lbl:8} {bar} {cnt or 0:,}')
+print(f'\nGenre Top 10:')
+for g, c in genres:
+    print(f'  {g[:25]:25} {c:,}')
+db.close()
+"""
+            import base64
+            b64 = base64.b64encode(status_script.encode('utf-8')).decode()
+            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            cmd = ssh_cmd(remote)
+            yield _sse("line", {"text": "[SSH→MBP] Lexicon DB 狀態查詢"})
+            yield from run_stream(cmd, timeout=60)
+
+        elif command in ("run-scan",):
             # 透過 SSH 在 MBP 執行掃描腳本
             scan_script = r"""
 import os, collections
