@@ -145,18 +145,27 @@ def portal_versions(query: str) -> list[dict]:
     return []
 
 
-def pick_urls_by_priority(items: list[dict]) -> list[tuple[str, str]]:
+TIDAL_SEARCH_TOKEN = "__TIDAL_SEARCH__"  # Tidal URL 空時用 query 搜尋下載
+
+
+def pick_urls_by_priority(items: list[dict], query: str = "") -> list[tuple[str, str]]:
     """
     依 Beatport → Tidal → Apple Music 順序取 URL。
-    回傳 [(url, platform_name), ...]，每個平台最多取 1 個最佳結果。
+    回傳 [(url, platform_name), ...]。
+    Tidal URL 空時改用 TIDAL_SEARCH_TOKEN 標記，main loop 改用 query 字串下載。
     """
     order = ["beatport", "tidal", "apple_music"]
     by_provider: dict[str, str] = {}
     for item in items:
         provider = item.get("provider", "").lower()
         url = item.get("url", "")
-        if url and provider in order and provider not in by_provider:
+        if provider not in order or provider in by_provider:
+            continue
+        if url:
             by_provider[provider] = url
+        elif provider == "tidal" and item.get("label") and query:
+            # Tidal 有結果但 url 空 → 用 query 字串直接搜尋下載
+            by_provider[provider] = TIDAL_SEARCH_TOKEN
     result = []
     for p in order:
         if p in by_provider:
@@ -496,7 +505,7 @@ def main() -> int:
             stats["lossy_not_found"] += 1
             continue
 
-        url_list = pick_urls_by_priority(items)
+        url_list = pick_urls_by_priority(items, query)
         if not url_list:
             print(f"{pf} 無可用 URL，跳過: {rel}", flush=True)
             stats["lossy_not_found"] += 1
@@ -504,8 +513,11 @@ def main() -> int:
 
         succeeded = False
         for url, platform in url_list:
-            print(f"  → 嘗試 {platform}: {url}", flush=True)
-            result = run_download_script(url)
+            # Tidal URL 空時用 query 字串搜尋下載
+            actual_url = query if url == TIDAL_SEARCH_TOKEN else url
+            display_url = f"[tidal search] {query!r}" if url == TIDAL_SEARCH_TOKEN else url
+            print(f"  → 嘗試 {platform}: {display_url}", flush=True)
+            result = run_download_script(actual_url)
             if result.get("success"):
                 files_out = result.get("files", [])
                 print(f"  OK({platform}) → {files_out}", flush=True)
