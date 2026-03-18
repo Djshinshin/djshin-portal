@@ -134,13 +134,20 @@ def within_allowed_window(now: datetime | None = None) -> bool:
 # ── Audio helpers ─────────────────────────────────────────────────────────────
 
 def ffprobe_info(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise RuntimeError(f"ffprobe: 檔案不存在 {path}")
+    size = path.stat().st_size
+    if size < 4096:
+        raise RuntimeError(f"ffprobe: 檔案過小({size}B)，可能下載失敗 {path.name}")
     result = run(
         ["ffprobe", "-v", "quiet", "-print_format", "json",
          "-show_format", "-show_streams", str(path)],
         timeout=60,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "ffprobe failed")
+        raise RuntimeError(
+            f"ffprobe failed [{path.name}]: {result.stderr.strip() or result.stdout.strip() or 'no output'}"
+        )
     payload = json.loads(result.stdout or "{}")
     fmt  = payload.get("format", {})
     tags = {str(k).lower(): str(v) for k, v in fmt.get("tags", {}).items()}
@@ -522,6 +529,15 @@ def download_query(query: str) -> dict[str, Any]:
             recent_files = [p for p in temp_dir.rglob("*")
                             if p.is_file() and not p.name.startswith(".")]
             platform     = "Apple Music"
+            # apple_music: 立即記錄 gamdl 輸出（後續 reconcile 失敗時可看到原因）
+            result_payload["exit_code"]   = result.returncode
+            result_payload["output_tail"] = clean_output(
+                (result.stdout or "") + "\n" + (result.stderr or "")
+            )[-1200:]
+            result_payload["temp_files"] = [
+                {"name": p.name, "size": p.stat().st_size}
+                for p in recent_files
+            ]
         else:
             raise RuntimeError("unsupported provider")
 
@@ -532,10 +548,11 @@ def download_query(query: str) -> dict[str, Any]:
             and not p.name.startswith("._")
         ]
 
-        result_payload["exit_code"]   = result.returncode
-        result_payload["output_tail"] = clean_output(
-            (result.stdout or "") + "\n" + (result.stderr or "")
-        )[-1200:]
+        if provider != "apple_music":  # apple_music 已在上面設置過
+            result_payload["exit_code"]   = result.returncode
+            result_payload["output_tail"] = clean_output(
+                (result.stdout or "") + "\n" + (result.stderr or "")
+            )[-1200:]
 
         if result.returncode not in (0, 1) and not audio_files:
             raise RuntimeError(result_payload["output_tail"] or "download failed")
