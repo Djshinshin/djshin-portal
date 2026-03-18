@@ -260,9 +260,6 @@ def storage_format_label(info: dict[str, Any], platform: str) -> str:
         return "ALAC"
     if codec == "flac" or ext == ".flac":
         return "FLAC"
-    # AAC/M4A 保留原格式，不強迫拒絕
-    if ext in (".m4a", ".mp4") or codec in ("aac", "aac_latm"):
-        return "M4A"
     return "FLAC"
 
 
@@ -311,10 +308,11 @@ def reconcile_apple_music_files(
         )
     info = ffprobe_info(audio_files[0])
     codec = str(info.get("codec") or "").lower()
-    # ALAC = 真正無損； AAC = 有損但仍保存（部分曲目 Apple Music 只有 AAC）
-    if codec not in ("alac", "aac", "aac_latm"):
+    # 只接受 ALAC（無損）→ 轉 FLAC 供 CDJ-3000 使用
+    # AAC 有損拒絕，代表此曲 Apple Music 無 ALAC 版本，請改用 Beatport/Tidal
+    if codec != "alac":
         raise RuntimeError(
-            f"Apple Music 未取得預期格式，實際 codec={codec}，已拒絕保存"
+            f"此曲 Apple Music 僅提供 {codec.upper()}（有損），無法用於 CDJ-3000。請改用 Beatport 或 Tidal 下載 FLAC。"
         )
     expected_duration = float(expected.get("duration") or 0)
     actual_duration   = float(info.get("duration") or 0)
