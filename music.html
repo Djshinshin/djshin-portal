@@ -413,14 +413,38 @@ function openSSE(url, onDone) {
   const es = new EventSource(url);
   currentSSE = es;
 
+  let progressLineEl = null;
+
   es.addEventListener('start', () => {});
   es.addEventListener('phase', e => {
     const d = JSON.parse(e.data);
+    progressLineEl = null;
     appendLine('── ' + d.text + ' ──', 'line-phase');
+  });
+  es.addEventListener('progress', e => {
+    const d = JSON.parse(e.data);
+    const t = d.text || '';
+    // 更新 progress bar（抓 % 數字）
+    const bar = document.getElementById('progressBar');
+    const m = t.match(/(\d+)%/);
+    if (m) {
+      const pct = parseInt(m[1], 10);
+      bar.classList.remove('indeterminate');
+      bar.style.width = pct + '%';
+    }
+    // 原地更新同一行（不新增）
+    if (!progressLineEl) {
+      progressLineEl = document.createElement('div');
+      progressLineEl.className = 'line-muted progress-line';
+      outputEl.appendChild(progressLineEl);
+    }
+    progressLineEl.textContent = t;
+    outputEl.scrollTop = outputEl.scrollHeight;
   });
   es.addEventListener('line', e => {
     const d = JSON.parse(e.data);
     const t = d.text || '';
+    progressLineEl = null;  // 新行出現，重置 progress 行
     let cls = '';
     if (/error|fail|失敗|錯誤/i.test(t)) cls = 'line-err';
     else if (/warn|warning/i.test(t)) cls = 'line-warn';
@@ -431,6 +455,10 @@ function openSSE(url, onDone) {
     const d = JSON.parse(e.data);
     es.close();
     currentSSE = null;
+    // done 時將 bar 推到技術性 100%（再由 finishOutput 清除）
+    const bar = document.getElementById('progressBar');
+    bar.classList.remove('indeterminate');
+    bar.style.width = d.ok ? '100%' : bar.style.width;
     if (onDone) onDone(d);
     finishOutput(d.ok);
   });

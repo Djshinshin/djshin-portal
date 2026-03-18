@@ -159,6 +159,28 @@ def api_set_genre():
 
 
 # ── 下載 ──────────────────────────────────────────────────────────────────────
+import re as _re
+_ANSI_RE = _re.compile(r'\x1b\[[0-9;]*[mGKHF]|\r')
+_PROG_RE = _re.compile(r'(\d+)\s*%.*?([\d.]+\s*(?:MB|KB|GB)/s).*?(\d+:\d+)', _re.IGNORECASE)
+
+def _parse_progress(raw: str) -> str | None:
+    """從 beatportdl 進度行萃取簡潔資訊，回傳 None 表示非進度行。"""
+    clean = _ANSI_RE.sub('', raw).strip()
+    # beatportdl 進度格式：⣷ Title [FLAC]  [===>---] 50% | 4.5 MB/s | 00:03
+    m = _PROG_RE.search(clean)
+    if m:
+        pct, speed, eta = m.group(1), m.group(2), m.group(3)
+        # 取曲目名稱（第一個 [ 之前）
+        title_part = clean.split('[')[0].strip()
+        # 移除 spinner 字元
+        title_part = _re.sub(r'^[\u2800-\u28ff\u25a0-\u25ff\s]+', '', title_part).strip()
+        return f"{title_part}  {pct}%  {speed}  ETA {eta}"
+    # 完成行
+    if clean.startswith('\u2713') or '✓' in clean:
+        title = clean.replace('✓', '').strip()
+        return f"✓ {title}"
+    return None
+
 @music_bp.route("/stream/download")
 @music_auth_required
 def stream_download():
@@ -168,7 +190,67 @@ def stream_download():
 
     def generate():
         cmd = [MUSIC_VENV_PYTHON, str(DOWNLOAD_SCRIPT), "--manual-request"] + query.split()
-        yield from run_stream(cmd, timeout=3600)
+        env = {**os.environ}
+        yield _sse("start", {"ts": time.strftime("%H:%M:%S")})
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            assert proc.stdout
+            last_progress = ""
+            result_json = None
+            for line in proc.stdout:
+                raw = line.rstrip()
+                if not raw:
+                    continue
+                # 嘗試解析為最終 JSON
+                if raw.startswith('{') and '"success"' in raw:
+                    try:
+                        result_json = json.loads(raw)
+                        continue
+                    except Exception:
+                        pass
+                # 過濾進度行
+                prog = _parse_progress(raw)
+                if prog:
+                    if prog != last_progress:
+                        last_progress = prog
+                        yield _sse("progress", {"text": prog})
+                else:
+                    # 非進度行：只顯示有意義的訊息
+                    clean = _ANSI_RE.sub('', raw).strip()
+                    if clean and not clean.startswith('Enter url'):
+                        yield _sse("line", {"text": clean})
+            proc.wait(timeout=3600)
+            # 根據結果 JSON 或 exit code 判斷成敗
+            if result_json:
+                ok = result_json.get("success", False) or bool(result_json.get("files"))
+                files = result_json.get("files", [])
+                if ok and files:
+                    for f in files:
+                        yield _sse("line", {"text": f"\u2705 已存: {f.split('/')[-1]}"})
+                    yield _sse("done", {"code": 0, "ok": True})
+                else:
+                    err = result_json.get("error", "下載失敗")
+                    # 過濾 EOF 誤報
+                    if "EOF" in err or "Enter url" in err:
+                        if last_progress:
+                            yield _sse("done", {"code": 0, "ok": True})
+                        else:
+                            yield _sse("error", {"text": err})
+                    else:
+                        yield _sse("error", {"text": err})
+            else:
+                code = proc.returncode
+                yield _sse("done", {"code": code, "ok": code in (0, 1) and bool(last_progress)})
+        except subprocess.TimeoutExpired:
+            yield _sse("error", {"text": "下載逾時"})
+        except Exception as exc:
+            yield _sse("error", {"text": str(exc)})
 
     return Response(
         stream_with_context(generate()),
