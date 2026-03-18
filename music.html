@@ -275,34 +275,15 @@ body{
         <button class="lib-btn" onclick="runLibrary('run-health')">
           <div class="lib-icon">🏥</div>健康檢查
         </button>
-        <button class="lib-btn" onclick="runLibrary('run-compare')">
-          <div class="lib-icon">⚖️</div>品質比對
-        </button>
-        <button class="lib-btn" onclick="runLibrary('run-queue')">
-          <div class="lib-icon">📋</div>建立佇列
-        </button>
-        <button class="lib-btn" onclick="runLibrary('run-dispatch')">
-          <div class="lib-icon">🚀</div>派發任務
-        </button>
-        <button class="lib-btn" onclick="runLibrary('logs')">
-          <div class="lib-icon">📜</div>查看日誌
-        </button>
         <button class="lib-btn" onclick="runLibrary('run-dedup')">
           <div class="lib-icon">🔎</div>指紋重複
         </button>
-        <button class="lib-btn" onclick="runLibraryCheck()">
+        <button class="lib-btn" onclick="runLibrary('run-check')">
           <div class="lib-icon">🎯</div>新歌比對
         </button>
       </div>
     </div>
-    <div class="card" id="checkCard" style="display:none">
-      <div class="card-title">新歌比對（輸入 MBP 上的檔案路徑）</div>
-      <div class="input-row">
-        <input type="text" id="checkInput" placeholder="/Volumes/Shin-Music/放歌專用/xxx.flac"
-               onkeydown="if(event.key==='Enter')submitCheck()">
-        <button class="btn btn-primary" id="checkBtn" onclick="submitCheck()">比對</button>
-      </div>
-    </div>
+
   </div>
 
   <!-- ── FLAC tab ── -->
@@ -565,25 +546,12 @@ function startOne() {
 // ── Library ────────────────────────────────────────────────────────────────
 const libLabels = {
   'status': '狀態', 'run-scan': '掃描', 'run-health': '健康檢查',
-  'run-compare': '品質比對', 'run-queue': '建立佇列',
-  'run-dispatch': '派發任務', 'logs': '日誌',
   'run-dedup': '指紋重複比對', 'run-check': '新歌比對'
 };
 function runLibrary(cmd) {
   if (busy) return;
   startOutput('Library: ' + (libLabels[cmd] || cmd));
   openSSE('/music/stream/library/' + cmd);
-}
-function runLibraryCheck() {
-  const card = document.getElementById('checkCard');
-  card.style.display = card.style.display === 'none' ? '' : 'none';
-}
-function submitCheck() {
-  const q = document.getElementById('checkInput').value.trim();
-  if (!q || busy) return;
-  document.getElementById('checkCard').style.display = 'none';
-  startOutput('新歌比對: ' + q);
-  openSSE('/music/stream/library/run-check?q=' + encodeURIComponent(q));
 }
 
 // ── FLAC ───────────────────────────────────────────────────────────────────

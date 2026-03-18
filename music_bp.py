@@ -310,7 +310,7 @@ def stream_one():
 @music_bp.route("/stream/library/<command>")
 @music_auth_required
 def stream_library(command: str):
-    allowed = {"status", "run-scan", "run-health", "run-compare", "run-queue", "run-dispatch", "logs", "run-dedup", "run-check"}
+    allowed = {"status", "run-scan", "run-health", "run-dedup", "run-check"}
     if command not in allowed:
         return jsonify({"error": "不允許的指令"}), 400
 
@@ -476,55 +476,132 @@ else:
             yield _sse("line", {"text": f"[SSH→MBP] 指紋比對重複掃描..."})
             yield from run_stream(cmd, timeout=7200)
 
+        elif command == "run-health":
+            # Lexicon DB：列出缺 BPM / Key / Genre 的曲目
+            health_script = r"""
+import sqlite3
+DB = '/Users/shinchen/Library/Application Support/Lexicon/main.db'
+db = sqlite3.connect(DB)
+total = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0').fetchone()[0]
+no_bpm  = db.execute('SELECT id,title,artist FROM Track WHERE archived=0 AND (bpm IS NULL OR bpm=0)').fetchall()
+no_key  = db.execute("SELECT id,title,artist FROM Track WHERE archived=0 AND (key IS NULL OR key='')").fetchall()
+no_genre= db.execute("SELECT id,title,artist FROM Track WHERE archived=0 AND (genre IS NULL OR genre='')").fetchall()
+no_cue  = db.execute('''
+  SELECT t.id, t.title, t.artist FROM Track t
+  WHERE t.archived=0
+  AND NOT EXISTS (SELECT 1 FROM Cuepoint c WHERE c.trackId=t.id)
+''').fetchall()
+print('='*50)
+print(f'  TOTAL TRACKS    {total:,}')
+print(f'  缺 BPM          {len(no_bpm):,}')
+print(f'  缺 Key          {len(no_key):,}')
+print(f'  缺 Genre        {len(no_genre):,}')
+print(f'  缺 CUE 點       {len(no_cue):,}')
+print('='*50)
+if no_bpm:
+    print(f'\n[缺 BPM] 前30筆:')
+    for _,t,a in no_bpm[:30]:
+        print(f'  {(a or "?")[:20]:20}  {(t or "?")[:35]}')
+if no_key:
+    print(f'\n[缺 Key] 前30筆:')
+    for _,t,a in no_key[:30]:
+        print(f'  {(a or "?")[:20]:20}  {(t or "?")[:35]}')
+if no_genre:
+    print(f'\n[缺 Genre] 前30筆:')
+    for _,t,a in no_genre[:30]:
+        print(f'  {(a or "?")[:20]:20}  {(t or "?")[:35]}')
+db.close()
+"""
+            import base64
+            b64 = base64.b64encode(health_script.encode('utf-8')).decode()
+            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            cmd = ssh_cmd(remote)
+            yield _sse("line", {"text": "[SSH→MBP] Lexicon 健康檢查：查詢缺 BPM/Key/Genre/CUE 曲目"})
+            yield from run_stream(cmd, timeout=60)
+
         elif command == "run-check":
-            # 比對單首新歌 vs 現有歌庫（需傳入 q 參數）
-            target = request.args.get("q", "").strip()
-            if not target:
-                yield _sse("error", {"text": "請提供要檢查的檔案路徑 ?q=..."})
-                return
-            check_script = f"""
-import os, subprocess, json
+            # 自動掃 Dropbox Music-Flac（排除 Upgrade），逐一與歌庫比對指紋
+            check_script = r"""
+import os, subprocess, json, collections
 FPCALC = '/opt/homebrew/bin/fpcalc'
-ROOT = '/Volumes/Shin-Music/放歌專用'
-TARGET = '{target}'
-EXTS = {{'.flac','.mp3','.m4a','.aiff','.wav','.aif'}}
-if not os.path.exists(TARGET):
-    print(f'檔案不存在: {{TARGET}}')
-    exit(1)
-print(f'計算目標指紋: {{os.path.basename(TARGET)}}')
-r = subprocess.run([FPCALC, '-json', TARGET], capture_output=True, text=True, timeout=30)
-target_fp = json.loads(r.stdout).get('fingerprint','')[:8]
-print(f'目標指紋: {{target_fp}}')
-print(f'掃描歌庫中...')
-matches = []
+ROOT    = '/Volumes/Shin-Music/放歌專用'
+DROPBOX = '/Users/shinchen/Library/CloudStorage/Dropbox-ProfessionalDJteam/Chen Shin/Music-Flac'
+EXCLUDE = os.path.join(DROPBOX, 'Upgrade')
+EXTS    = {'.flac','.mp3','.m4a','.aiff','.wav','.aif'}
+
+# 掃 Dropbox（排除 Upgrade 子資料夾）
+new_files = []
+for dp, dirs, files in os.walk(DROPBOX):
+    # 原地修改 dirs 以跳過 Upgrade
+    dirs[:] = [d for d in dirs if os.path.join(dp, d) != EXCLUDE]
+    for f in files:
+        if os.path.splitext(f)[1].lower() in EXTS:
+            new_files.append(os.path.join(dp, f))
+
+if not new_files:
+    print('Dropbox 資料夾中無音樂檔案（已排除 Upgrade）')
+    exit(0)
+
+print(f'Dropbox 新歌：{len(new_files)} 個（排除 Upgrade）')
+print(f'建立歌庫指紋索引中（{ROOT}）...')
+
+# 建立歌庫指紋索引
+lib_fps = collections.defaultdict(list)
+lib_total = 0
 for dp, dirs, files in os.walk(ROOT):
     for f in files:
-        if os.path.splitext(f)[1].lower() not in EXTS: continue
-        fp2 = os.path.join(dp, f)
-        if fp2 == TARGET: continue
+        if os.path.splitext(f)[1].lower() not in EXTS:
+            continue
+        fp_path = os.path.join(dp, f)
         try:
-            r2 = subprocess.run([FPCALC, '-json', fp2], capture_output=True, text=True, timeout=30)
-            fp_val = json.loads(r2.stdout).get('fingerprint','')[:8]
-            if fp_val == target_fp:
-                matches.append(fp2)
-        except: pass
-if matches:
-    print(f'發現 {{len(matches)}} 個重複:')
-    for m in matches:
-        print(f'  {{m}}')
-else:
-    print('未發現重複曲目')
+            r = subprocess.run([FPCALC, '-json', fp_path],
+                               capture_output=True, text=True, timeout=30)
+            fp_val = json.loads(r.stdout).get('fingerprint', '')[:8]
+            if fp_val:
+                lib_fps[fp_val].append(fp_path)
+                lib_total += 1
+        except Exception:
+            pass
+        if lib_total % 200 == 0 and lib_total > 0:
+            print(f'  索引進度: {lib_total} 首')
+
+print(f'歌庫指紋索引完成：{lib_total} 首')
+print('='*50)
+
+dupes  = []
+new_ok = []
+for nf in new_files:
+    fname = os.path.basename(nf)
+    try:
+        r = subprocess.run([FPCALC, '-json', nf],
+                           capture_output=True, text=True, timeout=30)
+        fp_val = json.loads(r.stdout).get('fingerprint', '')[:8]
+        if fp_val and fp_val in lib_fps:
+            match = os.path.basename(lib_fps[fp_val][0])
+            dupes.append((fname, match))
+        else:
+            new_ok.append(fname)
+    except Exception as e:
+        print(f'  跳過: {fname} ({e})')
+
+print(f'\n[結果]')
+print(f'  重複（已在歌庫）: {len(dupes)} 首 → 不需下載')
+print(f'  新歌（歌庫未有）: {len(new_ok)} 首 → 可保留')
+if dupes:
+    print(f'\n[重複清單]')
+    for d, m in dupes:
+        print(f'  {d[:50]:50}  ← 重複: {m[:40]}')
+if new_ok:
+    print(f'\n[新歌清單]')
+    for n in new_ok:
+        print(f'  {n}')
 """
             import base64
             b64 = base64.b64encode(check_script.encode('utf-8')).decode()
             remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
             cmd = ssh_cmd(remote)
-            yield _sse("line", {"text": f"[SSH→MBP] 指紋比對: {target}"})
-            yield from run_stream(cmd, timeout=3600)
-
-        else:
-            yield _sse("line", {"text": f"指令 '{command}' 尚未實作"})
-            yield _sse("done", {"code": 0, "ok": True})
+            yield _sse("line", {"text": "[SSH→MBP] 新歌比對：掃 Dropbox vs 歌庫（排除 Upgrade）"})
+            yield from run_stream(cmd, timeout=7200)
 
     return Response(
         stream_with_context(generate()),
