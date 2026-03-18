@@ -35,6 +35,21 @@ SHIN_MUSIC_DIR  = "/Volumes/Shin-Music/放歌專用"
 STATE_DIR       = Path("/tmp/openclaw-music")
 STATE_FILE      = STATE_DIR / "web_state.json"
 
+# ── Lexicon DB 快取（iMac 本地）───────────────────────────────────────────
+LEXICON_CACHE_DIR  = WORKSPACE / "portal" / "cache"
+LEXICON_CACHE_DB   = LEXICON_CACHE_DIR / "lexicon_main.db"
+LEXICON_SYNC_TIME  = LEXICON_CACHE_DIR / "lexicon_sync_time.txt"
+MBP_LEXICON_DB     = "/Users/shinchen/Library/Application Support/Lexicon/main.db"
+
+def get_lexicon_sync_time() -> str:
+    """讀取快取 DB 的同步時間標記，用於 UI 顯示。"""
+    try:
+        if LEXICON_SYNC_TIME.exists():
+            return LEXICON_SYNC_TIME.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return "未知"
+
 # ── MBP SSH (Tailscale) ──────────────────────────────────────────────────────
 MBP_HOST        = "100.81.94.11"
 MBP_USER        = "shinchen"
@@ -318,19 +333,86 @@ def stream_library(command: str):
         timeout = MANAGER_TIMEOUTS.get(command, 300)
 
         if command == "status":
+            # 優先讀 iMac 本地快取 DB，SSH 失敗時 fallback
+            import sqlite3 as _sqlite3
+            LEXICON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            use_cache = LEXICON_CACHE_DB.exists()
+            if use_cache:
+                sync_time = get_lexicon_sync_time()
+                yield _sse("line", {"text": f"[快取 DB] 使用本地快取 DB（同步時間: {sync_time}）"})
+                try:
+                    db = _sqlite3.connect(str(LEXICON_CACHE_DB), timeout=30)
+                    total      = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0').fetchone()[0]
+                    playlists  = db.execute('SELECT COUNT(*) FROM Playlist').fetchone()[0]
+                    total_dur  = db.execute('SELECT SUM(duration) FROM Track WHERE archived=0').fetchone()[0] or 0
+                    days       = int(total_dur) // 86400
+                    hours      = (int(total_dur) % 86400) // 3600
+                    has_bpm    = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0 AND bpm>0').fetchone()[0]
+                    has_key    = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND key!='' AND key IS NOT NULL").fetchone()[0]
+                    has_genre  = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND genre!='' AND genre IS NOT NULL").fetchone()[0]
+                    has_cue    = db.execute('SELECT COUNT(DISTINCT trackId) FROM Cuepoint').fetchone()[0]
+                    no_bpm     = total - has_bpm
+                    no_key     = total - has_key
+                    no_genre   = total - has_genre
+                    no_cue     = total - has_cue
+                    healthy    = db.execute('''
+                      SELECT COUNT(*) FROM Track t WHERE t.archived=0 AND t.bpm>0
+                      AND t.key!='' AND t.key IS NOT NULL
+                      AND EXISTS (SELECT 1 FROM Cuepoint c WHERE c.trackId=t.id)
+                    ''').fetchone()[0]
+                    healthy_pct = round(healthy / total * 100, 1) if total else 0
+                    genres     = db.execute("SELECT genre, COUNT(*) as c FROM Track WHERE archived=0 AND genre!='' GROUP BY genre ORDER BY c DESC LIMIT 10").fetchall()
+                    dist_bpm   = db.execute('''
+                      SELECT
+                        SUM(CASE WHEN bpm>=60  AND bpm<90  THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN bpm>=90  AND bpm<110 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN bpm>=110 AND bpm<120 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN bpm>=120 AND bpm<130 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN bpm>=130 AND bpm<140 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN bpm>=140 THEN 1 ELSE 0 END)
+                      FROM Track WHERE archived=0 AND bpm>0
+                    ''').fetchone()
+                    db.close()
+                    sep = '=' * 50
+                    yield _sse("line", {"text": sep})
+                    yield _sse("line", {"text": f"  TRACKS        {total:>8,}"})
+                    yield _sse("line", {"text": f"  PLAYLISTS     {playlists:>8,}"})
+                    yield _sse("line", {"text": f"  TOTAL PLAYTIME  {days}d {hours}h"})
+                    yield _sse("line", {"text": f"  HEALTHY       {healthy_pct:>7}%  ({healthy:,}/{total:,})"})
+                    yield _sse("line", {"text": sep})
+                    yield _sse("line", {"text": ""})
+                    yield _sse("line", {"text": "分析狀態:"})
+                    yield _sse("line", {"text": f"  有 BPM        {has_bpm:>7,}  缺 {no_bpm:,}"})
+                    yield _sse("line", {"text": f"  有 Key        {has_key:>7,}  缺 {no_key:,}"})
+                    yield _sse("line", {"text": f"  有 Genre      {has_genre:>7,}  缺 {no_genre:,}"})
+                    yield _sse("line", {"text": f"  有 CUE 點     {has_cue:>7,}  缺 {no_cue:,}"})
+                    yield _sse("line", {"text": ""})
+                    yield _sse("line", {"text": "BPM 分佈:"})
+                    bpm_labels = ['60-89','90-109','110-119','120-129','130-139','140+']
+                    bpm_max = max(dist_bpm) if dist_bpm and max(dist_bpm) else 1
+                    for lbl, cnt in zip(bpm_labels, dist_bpm):
+                        bar = '\u2588' * min(int((cnt or 0) / bpm_max * 30), 30)
+                        yield _sse("line", {"text": f"  {lbl:8} {bar} {cnt or 0:,}"})
+                    yield _sse("line", {"text": ""})
+                    yield _sse("line", {"text": "Genre Top 10:"})
+                    for g, c in genres:
+                        yield _sse("line", {"text": f"  {g[:25]:25} {c:,}"})
+                    yield _sse("done", {"code": 0, "ok": True})
+                    return
+                except Exception as e:
+                    yield _sse("line", {"text": f"[快取 DB 讀取失敗: {e}] 改用 SSH→MBP..."})
+            else:
+                yield _sse("line", {"text": "[快取 DB 不存在] SSH→MBP 即時查詢..."})
+            # Fallback: SSH→MBP
             status_script = r"""
 import sqlite3, os
 DB = '/Users/shinchen/Library/Application Support/Lexicon/main.db'
 db = sqlite3.connect(DB)
-
-# 基本統計
 total = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0').fetchone()[0]
 playlists = db.execute('SELECT COUNT(*) FROM Playlist').fetchone()[0]
 total_dur = db.execute('SELECT SUM(duration) FROM Track WHERE archived=0').fetchone()[0] or 0
 days = total_dur // 86400
 hours = (total_dur % 86400) // 3600
-
-# Healthy tracks (有 BPM + Key + Genre + 至少一個 CUE)
 has_bpm = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0 AND bpm>0').fetchone()[0]
 has_key = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND key!='' AND key IS NOT NULL").fetchone()[0]
 has_genre = db.execute("SELECT COUNT(*) FROM Track WHERE archived=0 AND genre!='' AND genre IS NOT NULL").fetchone()[0]
@@ -339,19 +421,13 @@ no_bpm = total - has_bpm
 no_key = total - has_key
 no_genre = total - has_genre
 no_cue = total - has_cue
-
-# Healthy = 有 bpm + key + cue
 healthy = db.execute('''
   SELECT COUNT(*) FROM Track t WHERE t.archived=0 AND t.bpm>0
   AND t.key!='' AND t.key IS NOT NULL
   AND EXISTS (SELECT 1 FROM Cuepoint c WHERE c.trackId=t.id)
 ''').fetchone()[0]
 healthy_pct = round(healthy/total*100, 1) if total else 0
-
-# 曲風分佈 top 10
 genres = db.execute("SELECT genre, COUNT(*) as c FROM Track WHERE archived=0 AND genre!='' GROUP BY genre ORDER BY c DESC LIMIT 10").fetchall()
-
-# BPM 區間
 dist_bpm = db.execute('''
   SELECT
     SUM(CASE WHEN bpm>=60 AND bpm<90 THEN 1 ELSE 0 END) as d60,
@@ -362,7 +438,6 @@ dist_bpm = db.execute('''
     SUM(CASE WHEN bpm>=140 THEN 1 ELSE 0 END) as d140
   FROM Track WHERE archived=0 AND bpm>0
 ''').fetchone()
-
 print('='*50)
 print(f'  TRACKS        {total:>8,}')
 print(f'  PLAYLISTS     {playlists:>8,}')
@@ -370,10 +445,10 @@ print(f'  TOTAL PLAYTIME  {days}d {hours}h')
 print(f'  HEALTHY       {healthy_pct:>7}%  ({healthy:,}/{total:,})')
 print('='*50)
 print(f'\n分析狀態:')
-print(f'  有 BPM        {has_bpm:>7,}  \u7f3a {no_bpm:,}')
-print(f'  有 Key        {has_key:>7,}  \u7f3a {no_key:,}')
-print(f'  有 Genre      {has_genre:>7,}  \u7f3a {no_genre:,}')
-print(f'  有 CUE 點     {has_cue:>7,}  \u7f3a {no_cue:,}')
+print(f'  有 BPM        {has_bpm:>7,}  缺 {no_bpm:,}')
+print(f'  有 Key        {has_key:>7,}  缺 {no_key:,}')
+print(f'  有 Genre      {has_genre:>7,}  缺 {no_genre:,}')
+print(f'  有 CUE 點     {has_cue:>7,}  缺 {no_cue:,}')
 print(f'\nBPM 分佈:')
 labels = ['60-89','90-109','110-119','120-129','130-139','140+']
 for lbl, cnt in zip(labels, dist_bpm):
@@ -477,7 +552,52 @@ else:
             yield from run_stream(cmd, timeout=7200)
 
         elif command == "run-health":
-            # Lexicon DB：列出缺 BPM / Key / Genre 的曲目
+            # Lexicon DB：列出缺 BPM / Key / Genre 的曲目，優先讀快取 DB
+            import sqlite3 as _sqlite3
+            use_cache = LEXICON_CACHE_DB.exists()
+            db_path   = str(LEXICON_CACHE_DB) if use_cache else None
+            if use_cache:
+                sync_time = get_lexicon_sync_time()
+                yield _sse("line", {"text": f"[快取 DB] 健康檢查（同步時間: {sync_time}）"})
+                try:
+                    db      = _sqlite3.connect(db_path, timeout=30)
+                    total   = db.execute('SELECT COUNT(*) FROM Track WHERE archived=0').fetchone()[0]
+                    no_bpm  = db.execute('SELECT id,title,artist FROM Track WHERE archived=0 AND (bpm IS NULL OR bpm=0)').fetchall()
+                    no_key  = db.execute("SELECT id,title,artist FROM Track WHERE archived=0 AND (key IS NULL OR key='')").fetchall()
+                    no_genre= db.execute("SELECT id,title,artist FROM Track WHERE archived=0 AND (genre IS NULL OR genre='')").fetchall()
+                    no_cue  = db.execute('''
+                      SELECT t.id, t.title, t.artist FROM Track t
+                      WHERE t.archived=0
+                      AND NOT EXISTS (SELECT 1 FROM Cuepoint c WHERE c.trackId=t.id)
+                    ''').fetchall()
+                    db.close()
+                    sep = '=' * 50
+                    yield _sse("line", {"text": sep})
+                    yield _sse("line", {"text": f"  TOTAL TRACKS    {total:,}"})
+                    yield _sse("line", {"text": f"  缺 BPM          {len(no_bpm):,}"})
+                    yield _sse("line", {"text": f"  缺 Key          {len(no_key):,}"})
+                    yield _sse("line", {"text": f"  缺 Genre        {len(no_genre):,}"})
+                    yield _sse("line", {"text": f"  缺 CUE 點       {len(no_cue):,}"})
+                    yield _sse("line", {"text": sep})
+                    if no_bpm:
+                        yield _sse("line", {"text": "\n[缺 BPM] 前30筆:"})
+                        for _,t,a in no_bpm[:30]:
+                            yield _sse("line", {"text": f"  {(a or '?')[:20]:20}  {(t or '?')[:35]}"})
+                    if no_key:
+                        yield _sse("line", {"text": "\n[缺 Key] 前30筆:"})
+                        for _,t,a in no_key[:30]:
+                            yield _sse("line", {"text": f"  {(a or '?')[:20]:20}  {(t or '?')[:35]}"})
+                    if no_genre:
+                        yield _sse("line", {"text": "\n[缺 Genre] 前30筆:"})
+                        for _,t,a in no_genre[:30]:
+                            yield _sse("line", {"text": f"  {(a or '?')[:20]:20}  {(t or '?')[:35]}"})
+                    yield _sse("done", {"code": 0, "ok": True})
+                    return
+                except Exception as e:
+                    yield _sse("line", {"text": f"[快取 DB 讀取失敗: {e}] 改用 SSH→MBP..."})
+            else:
+                yield _sse("line", {"text": "[快取 DB 不存在] SSH→MBP 即時查詢..."})
+            # Fallback: SSH→MBP
             health_script = r"""
 import sqlite3
 DB = '/Users/shinchen/Library/Application Support/Lexicon/main.db'
