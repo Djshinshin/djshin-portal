@@ -314,13 +314,35 @@ def classify_file(path: Path) -> str:
     return "unknown"
 
 
+# DJ remix/edit tag 過濾樣式（不影響主標題）
+_STRIP_TAGS_RE = re.compile(
+    r"\s*[\(\[]\s*"
+    r"(?:XMiX\s*(?:Edit|Short\s*Cut|Long\s*Version|Edit\s*Clean)?|XMIXR)"
+    r"\s*[\)\]]"
+    r"|\s+XMIXR\b"                              # 空白前置的 XMIXR
+    r"|\s*[\(\[]\s*XMiX\s*(?:Edit|Short\s*Cut|Long\s*Version|Edit\s*Clean|Edit\s*Clean)?\s*[\)\]]"
+    r"|\s+XMiX\s+(?:Edit|Short\s*Cut|Long\s*Version|Edit\s*Clean)\b"  # 空白前置
+    r"|(\s*[\(\[]\s*Radio\s*Edit\s*[\)\]])"
+    r"|(\s*[\(\[]\s*(?:Clean|Dirty)\s*[\)\]])",
+    re.IGNORECASE,
+)
+
+
 def build_search_query(path: Path, tags: dict) -> str:
     artist = tags.get("artist") or tags.get("album_artist") or ""
     title  = tags.get("title") or ""
-    if artist and title:
-        return f"{artist} {title}"
-    stem = re.sub(r"^\d+[\s._\-]+", "", path.stem)
-    return stem
+    if not (artist and title):
+        stem = re.sub(r"^\d+[\s._\-]+", "", path.stem)
+        return stem
+    # 過濾 XMIXR / XMiX Edit / Radio Edit 等 DJ 標記
+    clean_title = _STRIP_TAGS_RE.sub("", title).strip()
+    # 過濾後沒有 mix 字樣，加 Extended Mix
+    if clean_title and not re.search(
+        r"(extended|original|club|instrumental|dub|remix)\s*(mix)?\b",
+        clean_title, re.IGNORECASE
+    ):
+        clean_title = f"{clean_title} Extended Mix"
+    return f"{artist} {clean_title}".strip()
 
 
 def build_dropbox_path(tags: dict, src_name: str, platform: str) -> str:
