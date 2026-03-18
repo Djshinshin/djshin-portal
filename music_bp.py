@@ -28,6 +28,9 @@ SCRIPTS         = WORKSPACE / "scripts"
 DOWNLOAD_SCRIPT = MUSIC_TOOLS / "download_music_to_nas.py"
 VERSIONS_SCRIPT = MUSIC_TOOLS / "search_music_versions.py"
 ANALYZE_SCRIPT  = MUSIC_TOOLS / "analyze_music_with_mik.py"
+
+# venv python（裝有 mutagen/gamdl/tiddl/yt-dlp 等依賴）
+MUSIC_VENV_PYTHON = str(WORKSPACE / "music-tools-venv" / "bin" / "python3")
 MANAGER_SCRIPT  = CRON_SCRIPTS / "openclaw_music_library_manager.sh"
 FLAC_ENGINE     = SCRIPTS / "flac-upgrade-engine.py"
 
@@ -164,7 +167,7 @@ def stream_download():
         return jsonify({"error": "缺少 query"}), 400
 
     def generate():
-        cmd = ["python3", str(DOWNLOAD_SCRIPT), "--manual-request"] + query.split()
+        cmd = [MUSIC_VENV_PYTHON, str(DOWNLOAD_SCRIPT), "--manual-request"] + query.split()
         yield from run_stream(cmd, timeout=3600)
 
     return Response(
@@ -183,7 +186,7 @@ def api_versions():
         return jsonify({"error": "缺少 query"}), 400
 
     result = subprocess.run(
-        ["python3", str(VERSIONS_SCRIPT)] + query.split(),
+        [MUSIC_VENV_PYTHON, str(VERSIONS_SCRIPT)] + query.split(),
         text=True, capture_output=True, timeout=300,
     )
     output = result.stdout.strip()
@@ -228,7 +231,7 @@ def stream_pick():
         return jsonify({"error": f"#{index} 無直接下載連結"}), 400
 
     def generate():
-        cmd = ["python3", str(DOWNLOAD_SCRIPT), "--manual-request", url]
+        cmd = [MUSIC_VENV_PYTHON, str(DOWNLOAD_SCRIPT), "--manual-request", url]
         yield from run_stream(cmd, timeout=3600)
 
     return Response(
@@ -248,7 +251,7 @@ def stream_analyze():
         genre = state.get("genre", "")
 
     def generate():
-        cmd = ["python3", str(ANALYZE_SCRIPT)]
+        cmd = [MUSIC_VENV_PYTHON, str(ANALYZE_SCRIPT)]
         if genre:
             cmd += ["--genre", genre]
         yield from run_stream(cmd, timeout=3600)
@@ -285,7 +288,7 @@ def stream_one():
     def generate():
         # Step 1: download
         yield _sse("phase", {"text": f"下載: {query}"})
-        dl_cmd = ["python3", str(DOWNLOAD_SCRIPT), "--manual-request"] + query.split()
+        dl_cmd = [MUSIC_VENV_PYTHON, str(DOWNLOAD_SCRIPT), "--manual-request"] + query.split()
         exit_code = 0
         env = {**os.environ}
         proc = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
@@ -302,7 +305,7 @@ def stream_one():
 
         # Step 2: analyze
         yield _sse("phase", {"text": f"Analyze: {genre or '自動判斷'}"})
-        az_cmd = ["python3", str(ANALYZE_SCRIPT)]
+        az_cmd = [MUSIC_VENV_PYTHON, str(ANALYZE_SCRIPT)]
         if genre:
             az_cmd += ["--genre", genre]
         proc2 = subprocess.Popen(az_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
