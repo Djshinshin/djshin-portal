@@ -82,13 +82,24 @@ def portal_login() -> str:
     )
     try:
         resp = urlopen(req, context=ctx, timeout=15)
-        # 拿 Set-Cookie
-        cookie_hdr = resp.headers.get("Set-Cookie", "")
+        # 拿 Set-Cookie（相容 urllib / Cloudflare）
+        info = resp.info()
+        # get_all 返回所有 Set-Cookie 標頭（list）
+        cookies = info.get_all("Set-Cookie") or []
+        for cookie_hdr in cookies:
+            for part in cookie_hdr.split(";"):
+                part = part.strip()
+                if part.startswith("session="):
+                    _portal_cookie = part
+                    return _portal_cookie
+        # fallback: 直接用單一 get
+        cookie_hdr = info.get("Set-Cookie", "")
         for part in cookie_hdr.split(";"):
             part = part.strip()
             if part.startswith("session="):
                 _portal_cookie = part
                 return _portal_cookie
+        print(f"[Portal login 失敗: Set-Cookie header 找不到 session=]", flush=True)
     except Exception as e:
         print(f"[Portal login 失敗: {e}]", flush=True)
     return ""
@@ -97,21 +108,35 @@ def portal_login() -> str:
 def portal_versions(query: str) -> list[dict]:
     """呼叫 Portal /music/api/versions，回傳 items 清單。"""
     global _portal_cookie
-    if not _portal_cookie:
-        portal_login()
     ctx = ssl._create_unverified_context()
     encoded = quote(query, safe="")
-    req = urllib.request.Request(
-        f"{PORTAL_BASE}/music/api/versions?q={encoded}",
-        headers={"Cookie": _portal_cookie},
-    )
-    try:
-        with urlopen(req, context=ctx, timeout=60) as resp:
-            payload = json.loads(resp.read())
-            return payload.get("items", [])
-    except Exception as e:
-        print(f"  [Portal versions 失敗: {e}]", flush=True)
-        return []
+
+    for attempt in range(2):
+        if not _portal_cookie:
+            portal_login()
+        if not _portal_cookie:
+            print(f"  [Portal login 失敗，跳過]", flush=True)
+            return []
+        req = urllib.request.Request(
+            f"{PORTAL_BASE}/music/api/versions?q={encoded}",
+            headers={"Cookie": _portal_cookie},
+        )
+        try:
+            with urlopen(req, context=ctx, timeout=60) as resp:
+                payload = json.loads(resp.read())
+                return payload.get("items", [])
+        except urllib.error.HTTPError as e:
+            if e.code == 403 and attempt == 0:
+                # session 過期，重新登入後再試
+                _portal_cookie = ""
+                portal_login()
+                continue
+            print(f"  [Portal versions 失敗: {e}]", flush=True)
+            return []
+        except Exception as e:
+            print(f"  [Portal versions 失敗: {e}]", flush=True)
+            return []
+    return []
 
 
 def pick_urls_by_priority(items: list[dict]) -> list[tuple[str, str]]:
