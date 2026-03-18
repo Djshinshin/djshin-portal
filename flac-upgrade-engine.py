@@ -77,7 +77,10 @@ def portal_login() -> str:
     req = urllib.request.Request(
         f"{PORTAL_BASE}/auth/login",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+        },
         method="POST",
     )
     try:
@@ -119,7 +122,10 @@ def portal_versions(query: str) -> list[dict]:
             return []
         req = urllib.request.Request(
             f"{PORTAL_BASE}/music/api/versions?q={encoded}",
-            headers={"Cookie": _portal_cookie},
+            headers={
+                "Cookie": _portal_cookie,
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+            },
         )
         try:
             with urlopen(req, context=ctx, timeout=60) as resp:
