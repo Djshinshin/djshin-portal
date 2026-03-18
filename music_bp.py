@@ -310,7 +310,7 @@ def stream_one():
 @music_bp.route("/stream/library/<command>")
 @music_auth_required
 def stream_library(command: str):
-    allowed = {"status", "run-scan", "run-health", "run-compare", "run-queue", "run-dispatch", "logs"}
+    allowed = {"status", "run-scan", "run-health", "run-compare", "run-queue", "run-dispatch", "logs", "run-dedup", "run-check"}
     if command not in allowed:
         return jsonify({"error": "不允許的指令"}), 400
 
@@ -355,6 +355,99 @@ if non_flac:
             cmd = ssh_cmd(remote)
             yield _sse("line", {"text": f"[SSH→MBP] 掃描 {SHIN_MUSIC_DIR}"})
             yield from run_stream(cmd, timeout=timeout)
+        elif command == "run-dedup":
+            # 建立指紋庫並找重複曲目
+            dedup_script = r"""
+import os, subprocess, json, collections
+FPCALC = '/opt/homebrew/bin/fpcalc'
+ROOT = '/Volumes/Shin-Music/放歌專用'
+EXTS = {'.flac','.mp3','.m4a','.aiff','.wav','.aif'}
+print(f'掃描 {ROOT} ...')
+files = []
+for dp, dirs, fs in os.walk(ROOT):
+    for f in fs:
+        if os.path.splitext(f)[1].lower() in EXTS:
+            files.append(os.path.join(dp, f))
+print(f'共 {len(files)} 個檔案，開始計算指紋...')
+fingerprints = {}
+for i, fp in enumerate(files):
+    try:
+        r = subprocess.run([FPCALC, '-json', fp], capture_output=True, text=True, timeout=30)
+        d = json.loads(r.stdout)
+        fingerprints[fp] = d.get('fingerprint', '')
+        if (i+1) % 100 == 0:
+            print(f'  進度: {i+1}/{len(files)}')
+    except Exception as e:
+        print(f'  跳過: {os.path.basename(fp)} ({e})')
+print(f'建立指紋庫完成: {len(fingerprints)} 首')
+# 比對前 8 碼相同即視為重複
+groups = collections.defaultdict(list)
+for path, fp in fingerprints.items():
+    key = fp[:8] if fp else 'NOPRINT'
+    groups[key].append(path)
+dupes = {k: v for k, v in groups.items() if len(v) > 1}
+print(f'發現可能重複組數: {len(dupes)}')
+if dupes:
+    for key, paths in list(dupes.items())[:20]:
+        print(f'\n[重複組 {key[:6]}]')
+        for p in paths:
+            print(f'  {os.path.basename(p)}')
+else:
+    print('未發現重複曲目')
+"""
+            import base64
+            b64 = base64.b64encode(dedup_script.encode('utf-8')).decode()
+            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            cmd = ssh_cmd(remote)
+            yield _sse("line", {"text": f"[SSH→MBP] 指紋比對重複掃描..."})
+            yield from run_stream(cmd, timeout=7200)
+
+        elif command == "run-check":
+            # 比對單首新歌 vs 現有歌庫（需傳入 q 參數）
+            target = request.args.get("q", "").strip()
+            if not target:
+                yield _sse("error", {"text": "請提供要檢查的檔案路徑 ?q=..."})
+                return
+            check_script = f"""
+import os, subprocess, json
+FPCALC = '/opt/homebrew/bin/fpcalc'
+ROOT = '/Volumes/Shin-Music/放歌專用'
+TARGET = '{target}'
+EXTS = {{'.flac','.mp3','.m4a','.aiff','.wav','.aif'}}
+if not os.path.exists(TARGET):
+    print(f'檔案不存在: {{TARGET}}')
+    exit(1)
+print(f'計算目標指紋: {{os.path.basename(TARGET)}}')
+r = subprocess.run([FPCALC, '-json', TARGET], capture_output=True, text=True, timeout=30)
+target_fp = json.loads(r.stdout).get('fingerprint','')[:8]
+print(f'目標指紋: {{target_fp}}')
+print(f'掃描歌庫中...')
+matches = []
+for dp, dirs, files in os.walk(ROOT):
+    for f in files:
+        if os.path.splitext(f)[1].lower() not in EXTS: continue
+        fp2 = os.path.join(dp, f)
+        if fp2 == TARGET: continue
+        try:
+            r2 = subprocess.run([FPCALC, '-json', fp2], capture_output=True, text=True, timeout=30)
+            fp_val = json.loads(r2.stdout).get('fingerprint','')[:8]
+            if fp_val == target_fp:
+                matches.append(fp2)
+        except: pass
+if matches:
+    print(f'發現 {{len(matches)}} 個重複:')
+    for m in matches:
+        print(f'  {{m}}')
+else:
+    print('未發現重複曲目')
+"""
+            import base64
+            b64 = base64.b64encode(check_script.encode('utf-8')).decode()
+            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            cmd = ssh_cmd(remote)
+            yield _sse("line", {"text": f"[SSH→MBP] 指紋比對: {target}"})
+            yield from run_stream(cmd, timeout=3600)
+
         else:
             yield _sse("line", {"text": f"指令 '{command}' 尚未實作"})
             yield _sse("done", {"code": 0, "ok": True})
