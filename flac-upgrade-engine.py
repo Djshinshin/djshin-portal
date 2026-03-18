@@ -47,7 +47,7 @@ DROPBOX_CREDS     = WORKSPACE / ".dropbox-credentials"
 DROPBOX_FLAC_DIR  = "/Music-Flac"
 STATE_DIR         = Path("/tmp/openclaw-music")
 
-PORTAL_BASE  = "https://djshin.house"
+PORTAL_BASE  = "http://100.78.202.52:8880"  # Tailscale 直連，繞過 Cloudflare
 PORTAL_PASS  = "shin2026"
 
 # ffmpeg/ffprobe
