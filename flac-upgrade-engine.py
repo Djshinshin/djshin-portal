@@ -188,6 +188,22 @@ def sanitize(part: str) -> str:
     return re.sub(r"\s+", " ", s)[:180] or "Unknown"
 
 
+# 無損 codec
+LOSSLESS_CODECS = {
+    "flac", "alac",
+    "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be",
+    "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f32be",
+    "pcm_f64le", "pcm_f64be", "pcm_s16le_planar",
+}
+# 有損 codec
+LOSSY_CODECS = {
+    "aac", "mp3", "vorbis", "opus", "wma",
+    "wmav1", "wmav2", "wmapro",
+    "he_aac", "aac_latm", "ac3", "eac3", "mp2", "mp1",
+}
+MIN_BIT_DEPTH = 16
+
+
 def ffprobe_audio(path: Path) -> dict:
     try:
         r = subprocess.run(
@@ -201,18 +217,61 @@ def ffprobe_audio(path: Path) -> dict:
         tags   = {str(k).lower(): str(v) for k, v in fmt.get("tags", {}).items()}
         stream = next((s for s in payload.get("streams", [])
                        if s.get("codec_type") == "audio"), {})
-        return {"tags": tags, "codec": stream.get("codec_name", "").lower()}
+        # bit depth: bits_per_raw_sample 優先，fallback bits_per_sample
+        bits_raw    = int(stream.get("bits_per_raw_sample") or 0)
+        bits_sample = int(stream.get("bits_per_sample") or 0)
+        bit_depth   = bits_raw or bits_sample or 0
+        bitrate = int(stream.get("bit_rate") or fmt.get("bit_rate") or 0)
+        return {
+            "tags":        tags,
+            "codec":       stream.get("codec_name", "").lower(),
+            "bit_depth":   bit_depth,
+            "bitrate":     bitrate,
+            "sample_rate": int(stream.get("sample_rate") or 0),
+        }
     except Exception:
         return {}
 
 
-def is_lossless_file(path: Path) -> bool:
-    ext = path.suffix.lower()
-    if ext in {".flac", ".alac", ".wav", ".aiff", ".aif"}:
-        return True
-    if ext == ".m4a":
-        return ffprobe_audio(path).get("codec") == "alac"
-    return False
+def classify_file(path: Path) -> str:
+    """
+    回傳: 'flac' / 'lossless' / 'lossy' / 'unknown'
+    判定通則:
+      codec 在 LOSSY_CODECS                → lossy
+      codec 在 LOSSLESS_CODECS 且 bit_depth >= 16  → lossless（flac 特判）
+      codec 在 LOSSLESS_CODECS 且 bit_depth < 16   → lossy（失真品質）
+      codec 不在已知集合 → 靠 bit_depth 判斷，fallback 副檔名
+    """
+    if not path.exists() or path.stat().st_size < 4096:
+        return "unknown"
+    ext  = path.suffix.lower()
+    info = ffprobe_audio(path)
+    if not info:
+        return "unknown"
+    codec     = info.get("codec", "")
+    bit_depth = info.get("bit_depth", 0)
+
+    if codec == "flac":
+        return "flac"
+    if codec in LOSSY_CODECS:
+        return "lossy"
+    if codec in LOSSLESS_CODECS:
+        if bit_depth > 0 and bit_depth < MIN_BIT_DEPTH:
+            return "lossy"
+        return "lossless"
+    # codec 不在已知集合，靠 bit_depth
+    if bit_depth >= MIN_BIT_DEPTH:
+        return "lossless"
+    if 0 < bit_depth < MIN_BIT_DEPTH:
+        return "lossy"
+    # bit_depth 讀不到，fallback 副檔名
+    if ext == ".flac":
+        return "flac"
+    if ext in {".alac", ".wav", ".aiff", ".aif"}:
+        return "lossless"
+    if ext in LOSSY_EXTS or ext in {".m4a", ".aac"}:
+        return "lossy"
+    return "unknown"
 
 
 def build_search_query(path: Path, tags: dict) -> str:
@@ -344,26 +403,36 @@ def main() -> int:
     }
 
     for idx, src in enumerate(files, 1):
-        ext  = src.suffix.lower()
         rel  = src.relative_to(scan_dir)
         pf   = f"[{idx}/{total}]"
         info = ffprobe_audio(src)
         tags = info.get("tags", {})
+        kind = classify_file(src)  # 'flac' / 'lossless' / 'lossy' / 'unknown'
+        codec     = info.get("codec", "?")
+        bit_depth = info.get("bit_depth", 0)
+        bitrate   = info.get("bitrate", 0)
+        bd_str    = f"{bit_depth}bit" if bit_depth else "?bit"
+        br_str    = f"{bitrate//1000}kbps" if bitrate else ""
 
         # ── 已是 FLAC → 跳過 ─────────────────────────────────────────────
-        if ext == ".flac":
-            print(f"{pf} SKIP(FLAC) {rel}", flush=True)
+        if kind == "flac":
+            print(f"{pf} SKIP(FLAC {bd_str}) {rel}", flush=True)
             stats["flac_skip"] += 1
             continue
 
+        # ── ffprobe 失敗 → 跳過 ──────────────────────────────────────────
+        if kind == "unknown":
+            print(f"{pf} SKIP(unknown codec) {rel}", flush=True)
+            continue
+
         # ── 無損非 FLAC → 轉換後複製上傳（保留原檔）─────────────────────
-        if is_lossless_file(src):
+        if kind == "lossless":
             dropbox_path = build_dropbox_path(tags, src.name, "AppleMusic")
             if args.dry_run:
-                print(f"{pf} DRY 無損轉換 {rel} → {dropbox_path}", flush=True)
+                print(f"{pf} DRY 無損轉換 [{codec} {bd_str}] {rel} → {dropbox_path}", flush=True)
                 stats["lossless_converted"] += 1
                 continue
-            print(f"{pf} 無損轉換: {rel}", flush=True)
+            print(f"{pf} 無損轉換 [{codec} {bd_str}]: {rel}", flush=True)
             tmp_flac = convert_to_flac_copy(src)
             if not tmp_flac:
                 print(f"{pf} [FAIL] 轉換失敗: {rel}", flush=True)
@@ -385,11 +454,11 @@ def main() -> int:
         # ── 有損 → Portal 搜尋 → Beatport/Tidal/Apple Music ──────────────
         query = build_search_query(src, tags)
         if args.dry_run:
-            print(f"{pf} DRY 有損→搜尋 query={query!r} {rel}", flush=True)
+            print(f"{pf} DRY 有損→搜尋 [{codec} {bd_str} {br_str}] query={query!r} {rel}", flush=True)
             stats["lossy_upgraded"] += 1
             continue
 
-        print(f"{pf} 有損({ext}) 搜尋: {query!r}", flush=True)
+        print(f"{pf} 有損 [{codec} {bd_str} {br_str}] 搜尋: {query!r}", flush=True)
         items = portal_versions(query)
         if not items:
             print(f"{pf} 搜尋無結果，跳過: {rel}", flush=True)
