@@ -275,12 +275,18 @@ body{
         <button class="lib-btn" onclick="runLibrary('run-health')">
           <div class="lib-icon">🏥</div>健康檢查
         </button>
-        <button class="lib-btn" onclick="runLibrary('run-dedup')">
-          <div class="lib-icon">🔎</div>指紋重複
+        <button class="lib-btn" onclick="runLibraryOp('run-dedup','dedup')">
+          <div class="lib-icon">&#128270;</div>指紋重複
         </button>
-        <button class="lib-btn" onclick="runLibrary('run-check')">
-          <div class="lib-icon">🎯</div>新歌比對
+        <button class="lib-btn" onclick="runLibraryOp('run-check','check')">
+          <div class="lib-icon">&#127919;</div>新歌比對
         </button>
+      </div>
+      <div class="input-row" style="margin-top:10px">
+        <button class="btn" id="dedupPauseBtn" style="display:none;background:var(--warn);color:#000" onclick="pauseOp('dedup')">&#8214; 暫停（指紋重複）</button>
+        <button class="btn" id="dedupStopBtn"  style="display:none;background:var(--error);color:#fff" onclick="stopOp('dedup')">&#9632; 停止（指紋重複）</button>
+        <button class="btn" id="checkPauseBtn" style="display:none;background:var(--warn);color:#000" onclick="pauseOp('check')">&#8214; 暫停（新歌比對）</button>
+        <button class="btn" id="checkStopBtn"  style="display:none;background:var(--error);color:#fff" onclick="stopOp('check')">&#9632; 停止（新歌比對）</button>
       </div>
     </div>
 
@@ -297,6 +303,8 @@ body{
       <div class="input-row">
         <button class="btn btn-primary" id="flacBtn" onclick="startFlac(false)">執行升級</button>
         <button class="btn btn-secondary" id="flacDryBtn" onclick="startFlac(true)">Dry Run（預覽）</button>
+        <button class="btn" id="flacPauseBtn" style="display:none;background:var(--warn);color:#000" onclick="pauseOp('flac')">‖ 暫停</button>
+        <button class="btn" id="flacStopBtn"  style="display:none;background:var(--error);color:#fff" onclick="stopOp('flac')">■ 停止</button>
       </div>
     </div>
   </div>
@@ -420,6 +428,13 @@ function openSSE(url, onDone) {
     const d = JSON.parse(e.data);
     progressLineEl = null;
     appendLine('── ' + d.text + ' ──', 'line-phase');
+  });
+  es.addEventListener('flac_progress', e => {
+    const d = JSON.parse(e.data);
+    _opProgress = { current: d.current || 0, total: d.total || 0 };
+    const bar = document.getElementById('progressBar');
+    bar.classList.remove('indeterminate');
+    bar.style.width = (d.pct || 0) + '%';
   });
   es.addEventListener('progress', e => {
     const d = JSON.parse(e.data);
@@ -571,6 +586,71 @@ function startOne() {
   openSSE('/music/stream/one?q=' + encodeURIComponent(q));
 }
 
+// ── 暫停/停止/繼續 通用 ──────────────────────────────────────────────────
+let _opProgress = { current: 0, total: 0 };
+
+async function pauseOp(opKey) {
+  const { current, total } = _opProgress;
+  await fetch(`/music/api/op/${opKey}/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current, total })
+  });
+  localStorage.setItem(`op_pause_${opKey}`, JSON.stringify({
+    paused_at: current, total, paused_time: new Date().toLocaleString('zh-TW')
+  }));
+  appendLine(`‖ 暫停於第 ${current}/${total}`, 'line-warn');
+  showOpButtons(opKey, false);
+  setBusy(false);
+}
+
+async function stopOp(opKey) {
+  await fetch(`/music/api/op/${opKey}/stop`, { method: 'POST' });
+  localStorage.removeItem(`op_pause_${opKey}`);
+  appendLine('■ 已停止', 'line-err');
+  showOpButtons(opKey, false);
+  setBusy(false);
+}
+
+function showOpButtons(opKey, running) {
+  const ids = {
+    'flac':  ['flacPauseBtn',  'flacStopBtn'],
+    'dedup': ['dedupPauseBtn', 'dedupStopBtn'],
+    'check': ['checkPauseBtn', 'checkStopBtn'],
+  };
+  const pair = ids[opKey];
+  if (!pair) return;
+  pair.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = running ? '' : 'none';
+  });
+}
+
+async function checkResumeAndStart(opKey, startFn) {
+  let saved = null;
+  try {
+    const r = await fetch(`/music/api/op/${opKey}/state`);
+    saved = await r.json();
+  } catch(_) {}
+  if (!saved) {
+    const ls = localStorage.getItem(`op_pause_${opKey}`);
+    if (ls) try { saved = JSON.parse(ls); } catch(_) {}
+  }
+  if (saved && saved.paused_at > 0) {
+    const t = saved.paused_time || '';
+    const msg = `上次暫停於第 ${saved.paused_at}/${saved.total}（${t}）。是否繼續？`;
+    if (confirm(msg)) {
+      startFn(saved.paused_at);
+    } else {
+      await fetch(`/music/api/op/${opKey}/stop`, { method: 'POST' });
+      localStorage.removeItem(`op_pause_${opKey}`);
+      startFn(0);
+    }
+  } else {
+    startFn(0);
+  }
+}
+
 // ── Library ────────────────────────────────────────────────────────────────
 const libLabels = {
   'status': '狀態', 'run-scan': '掃描', 'run-health': '健康檢查',
@@ -581,12 +661,36 @@ function runLibrary(cmd) {
   startOutput('Library: ' + (libLabels[cmd] || cmd));
   openSSE('/music/stream/library/' + cmd);
 }
+function runLibraryOp(cmd, opKey) {
+  if (busy) return;
+  checkResumeAndStart(opKey, (resumeFrom) => {
+    const label = libLabels[cmd] || cmd;
+    startOutput('Library: ' + label + (resumeFrom ? ` (繼續第${resumeFrom})` : ''));
+    _opProgress = { current: resumeFrom || 0, total: 0 };
+    const url = '/music/stream/library/' + cmd +
+                (resumeFrom ? `?resume_from=${resumeFrom}` : '');
+    showOpButtons(opKey, true);
+    openSSE(url, () => showOpButtons(opKey, false));
+  });
+}
 
 // ── FLAC ───────────────────────────────────────────────────────────────────
 function startFlac(dry) {
   if (busy) return;
-  startOutput('FLAC 升級' + (dry ? '（Dry Run）' : ''));
-  openSSE('/music/stream/flac' + (dry ? '?dry=1' : ''));
+  checkResumeAndStart('flac', (resumeFrom) => {
+    if (dry) resumeFrom = 0;
+    const label = 'FLAC 升級' + (dry ? '（Dry Run）' : '') +
+                  (resumeFrom ? ` (繼續第${resumeFrom})` : '');
+    startOutput(label);
+    _opProgress = { current: resumeFrom || 0, total: 0 };
+    let url = '/music/stream/flac';
+    const params = [];
+    if (dry)        params.push('dry=1');
+    if (resumeFrom) params.push(`resume_from=${resumeFrom}`);
+    if (params.length) url += '?' + params.join('&');
+    showOpButtons('flac', true);
+    openSSE(url, () => showOpButtons('flac', false));
+  });
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────

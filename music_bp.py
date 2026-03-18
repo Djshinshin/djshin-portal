@@ -590,51 +590,18 @@ if non_flac:
             yield _sse("line", {"text": f"[SSH→MBP] 掃描 {SHIN_MUSIC_DIR}"})
             yield from run_stream(cmd, timeout=timeout)
         elif command == "run-dedup":
-            # 建立指紋庫並找重複曲目
-            dedup_script = r"""
-import os, subprocess, json, collections
-FPCALC = '/opt/homebrew/bin/fpcalc'
-ROOT = '/Volumes/Shin-Music/放歌專用'
-EXTS = {'.flac','.mp3','.m4a','.aiff','.wav','.aif'}
-print(f'掃描 {ROOT} ...')
-files = []
-for dp, dirs, fs in os.walk(ROOT):
-    for f in fs:
-        if os.path.splitext(f)[1].lower() in EXTS:
-            files.append(os.path.join(dp, f))
-print(f'共 {len(files)} 個檔案，開始計算指紋...')
-fingerprints = {}
-for i, fp in enumerate(files):
-    try:
-        r = subprocess.run([FPCALC, '-json', fp], capture_output=True, text=True, timeout=30)
-        d = json.loads(r.stdout)
-        fingerprints[fp] = d.get('fingerprint', '')
-        if (i+1) % 100 == 0:
-            print(f'  進度: {i+1}/{len(files)}')
-    except Exception as e:
-        print(f'  跳過: {os.path.basename(fp)} ({e})')
-print(f'建立指紋庫完成: {len(fingerprints)} 首')
-# 比對前 8 碼相同即視為重複
-groups = collections.defaultdict(list)
-for path, fp in fingerprints.items():
-    key = fp[:8] if fp else 'NOPRINT'
-    groups[key].append(path)
-dupes = {k: v for k, v in groups.items() if len(v) > 1}
-print(f'發現可能重複組數: {len(dupes)}')
-if dupes:
-    for key, paths in list(dupes.items())[:20]:
-        print(f'\n[重複組 {key[:6]}]')
-        for p in paths:
-            print(f'  {os.path.basename(p)}')
-else:
-    print('未發現重複曲目')
-"""
-            import base64
-            b64 = base64.b64encode(dedup_script.encode('utf-8')).decode()
-            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            # 建立指紋庫並找重複曲目（使用外部 dedup-engine.py）
+            resume_from_dedup = request.args.get("resume_from", "").strip()
+            flags = []
+            if resume_from_dedup and resume_from_dedup.isdigit():
+                flags.append(f"--resume-from={resume_from_dedup}")
+            remote = f"python3 {MBP_DEDUP_ENGINE} {' '.join(flags)}".strip()
             cmd = ssh_cmd(remote)
-            yield _sse("line", {"text": f"[SSH→MBP] 指紋比對重複掃描..."})
-            yield from run_stream(cmd, timeout=7200)
+            label = "指紋比對重複掃描"
+            if resume_from_dedup: label += f"（繼續第{resume_from_dedup}首）"
+            yield _sse("phase", {"text": f"{label} [SSH→MBP]"})
+            yield from _run_long("dedup", cmd, timeout=7200,
+                                 progress_re=r"\[(\d+)/(\d+)\]")
 
         elif command == "run-health":
             # Lexicon DB：列出缺 BPM / Key / Genre 的曲目，優先讀快取 DB
@@ -725,88 +692,18 @@ db.close()
             yield from run_stream(cmd, timeout=60)
 
         elif command == "run-check":
-            # 自動掃 Dropbox Music-Flac（排除 Upgrade），逐一與歌庫比對指紋
-            check_script = r"""
-import os, subprocess, json, collections
-FPCALC = '/opt/homebrew/bin/fpcalc'
-ROOT    = '/Volumes/Shin-Music/放歌專用'
-DROPBOX = '/Users/shinchen/Library/CloudStorage/Dropbox-ProfessionalDJteam/Chen Shin/Music-Flac'
-EXCLUDE = os.path.join(DROPBOX, 'Upgrade')
-EXTS    = {'.flac','.mp3','.m4a','.aiff','.wav','.aif'}
-
-# 掃 Dropbox（排除 Upgrade 子資料夾）
-new_files = []
-for dp, dirs, files in os.walk(DROPBOX):
-    # 原地修改 dirs 以跳過 Upgrade
-    dirs[:] = [d for d in dirs if os.path.join(dp, d) != EXCLUDE]
-    for f in files:
-        if os.path.splitext(f)[1].lower() in EXTS:
-            new_files.append(os.path.join(dp, f))
-
-if not new_files:
-    print('Dropbox 資料夾中無音樂檔案（已排除 Upgrade）')
-    exit(0)
-
-print(f'Dropbox 新歌：{len(new_files)} 個（排除 Upgrade）')
-print(f'建立歌庫指紋索引中（{ROOT}）...')
-
-# 建立歌庫指紋索引
-lib_fps = collections.defaultdict(list)
-lib_total = 0
-for dp, dirs, files in os.walk(ROOT):
-    for f in files:
-        if os.path.splitext(f)[1].lower() not in EXTS:
-            continue
-        fp_path = os.path.join(dp, f)
-        try:
-            r = subprocess.run([FPCALC, '-json', fp_path],
-                               capture_output=True, text=True, timeout=30)
-            fp_val = json.loads(r.stdout).get('fingerprint', '')[:8]
-            if fp_val:
-                lib_fps[fp_val].append(fp_path)
-                lib_total += 1
-        except Exception:
-            pass
-        if lib_total % 200 == 0 and lib_total > 0:
-            print(f'  索引進度: {lib_total} 首')
-
-print(f'歌庫指紋索引完成：{lib_total} 首')
-print('='*50)
-
-dupes  = []
-new_ok = []
-for nf in new_files:
-    fname = os.path.basename(nf)
-    try:
-        r = subprocess.run([FPCALC, '-json', nf],
-                           capture_output=True, text=True, timeout=30)
-        fp_val = json.loads(r.stdout).get('fingerprint', '')[:8]
-        if fp_val and fp_val in lib_fps:
-            match = os.path.basename(lib_fps[fp_val][0])
-            dupes.append((fname, match))
-        else:
-            new_ok.append(fname)
-    except Exception as e:
-        print(f'  跳過: {fname} ({e})')
-
-print(f'\n[結果]')
-print(f'  重複（已在歌庫）: {len(dupes)} 首 → 不需下載')
-print(f'  新歌（歌庫未有）: {len(new_ok)} 首 → 可保留')
-if dupes:
-    print(f'\n[重複清單]')
-    for d, m in dupes:
-        print(f'  {d[:50]:50}  ← 重複: {m[:40]}')
-if new_ok:
-    print(f'\n[新歌清單]')
-    for n in new_ok:
-        print(f'  {n}')
-"""
-            import base64
-            b64 = base64.b64encode(check_script.encode('utf-8')).decode()
-            remote = f"python3 -c \"import base64; exec(base64.b64decode('{b64}').decode())\""
+            # 自動掃 Dropbox Music-Flac（排除 Upgrade），與歌庫比對指紋（使用外部 check-engine.py）
+            resume_from_check = request.args.get("resume_from", "").strip()
+            flags = []
+            if resume_from_check and resume_from_check.isdigit():
+                flags.append(f"--resume-from={resume_from_check}")
+            remote = f"python3 {MBP_CHECK_ENGINE} {' '.join(flags)}".strip()
             cmd = ssh_cmd(remote)
-            yield _sse("line", {"text": "[SSH→MBP] 新歌比對：掃 Dropbox vs 歌庫（排除 Upgrade）"})
-            yield from run_stream(cmd, timeout=7200)
+            label = "新歌比對：Dropbox vs 歌庫"
+            if resume_from_check: label += f"（繼續第{resume_from_check}首）"
+            yield _sse("phase", {"text": f"{label} [SSH→MBP]"})
+            yield from _run_long("check", cmd, timeout=7200,
+                                 progress_re=r"\[(\d+)/(\d+)\]")
 
     return Response(
         stream_with_context(generate()),
@@ -816,24 +713,161 @@ if new_ok:
 
 
 # ── FLAC 升級 ─────────────────────────────────────────────────────────────────
+# ── 長時間操作 process 管理 ──────────────────────────────────────────────────
+# key: 'flac' / 'dedup' / 'check'
+_long_procs: dict[str, subprocess.Popen] = {}
+
+# 暫停狀態檔路徑
+FLAC_UPGRADE_STATE = STATE_DIR / "flac-upgrade-state.json"
+DEDUP_STATE        = STATE_DIR / "dedup-state.json"
+CHECK_STATE        = STATE_DIR / "check-state.json"
+
+MBP_DEDUP_ENGINE  = f"{MBP_WORKSPACE}/scripts/dedup-engine.py"
+MBP_CHECK_ENGINE  = f"{MBP_WORKSPACE}/scripts/check-engine.py"
+
+# backward compat alias
+_flac_proc = None  # unused, kept for safety
+
+
+def _kill_proc(key: str) -> None:
+    proc = _long_procs.pop(key, None)
+    if proc and proc.poll() is None:
+        proc.terminate()
+
+
+def _run_long(key: str, cmd: list[str], timeout: int,
+              progress_re: str | None = None) -> Generator:
+    """
+    執行長時間 SSH 工作，管理 proc。
+    progress_re: 如果提供，試圖從每行抽取 [N/total] 發送 flac_progress event。
+    """
+    env = {**os.environ}
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+        _long_procs[key] = proc
+        assert proc.stdout
+        yield _sse("start", {"ts": time.strftime("%H:%M:%S")})
+        for line in proc.stdout:
+            stripped = line.rstrip()
+            if stripped:
+                if progress_re:
+                    m = re.search(progress_re, stripped)
+                    if m:
+                        cur   = int(m.group(1))
+                        total = int(m.group(2))
+                        pct   = int(cur / total * 100) if total else 0
+                        yield _sse("flac_progress", {
+                            "current": cur, "total": total, "pct": pct
+                        })
+                yield _sse("line", {"text": stripped})
+        proc.wait(timeout=timeout)
+        code = proc.returncode
+        _long_procs.pop(key, None)
+        yield _sse("done", {"code": code, "ok": code == 0})
+    except Exception as exc:
+        _long_procs.pop(key, None)
+        yield _sse("error", {"text": str(exc)})
+
+
 @music_bp.route("/stream/flac")
 @music_auth_required
 def stream_flac():
-    dry = request.args.get("dry", "0") == "1"
+    global _flac_proc
+    dry         = request.args.get("dry", "0") == "1"
+    resume_from = request.args.get("resume_from", "").strip()
+    clear_pause = request.args.get("clear", "0") == "1"
+
+    if clear_pause:
+        FLAC_UPGRADE_STATE.unlink(missing_ok=True)
 
     def generate():
-        dry_flag = "--dry-run" if dry else ""
-        # 透過 Tailscale SSH 在 MBP 執行 FLAC 升級（硬碟接在 MBP）
+        global _flac_proc
+        flags = []
+        if dry:
+            flags.append("--dry-run")
+        if resume_from and resume_from.isdigit():
+            flags.append(f"--resume-from={resume_from}")
+        flags_str = " ".join(flags)
         remote = (
             f"OPENCLAW_MUSIC_SCAN_DIR='{SHIN_MUSIC_DIR}' "
-            f"python3 {MBP_FLAC_ENGINE} {dry_flag}".strip()
+            f"python3 {MBP_FLAC_ENGINE} {flags_str}".strip()
         )
         cmd = ssh_cmd(remote)
-        yield _sse("phase", {"text": f"FLAC 升級{'（dry run）' if dry else ''}: {SHIN_MUSIC_DIR} [SSH→MBP]"})
-        yield from run_stream(cmd, timeout=7200)
+        label = "FLAC 升級"
+        if dry:          label += "（dry run）"
+        if resume_from:  label += f"（繼續第{resume_from}首）"
+        yield _sse("phase", {"text": f"{label}: {SHIN_MUSIC_DIR} [SSH→MBP]"})
+        yield from _run_long("flac", cmd, timeout=7200,
+                              progress_re=r"\[(\d+)/(\d+)\]")
+        # 正常完成清除暫停狀態
+        code = _long_procs.get("flac")  # already popped by _run_long
+        if not dry:
+            # 如果 done event 是 ok=True 才清除（在 done event 後）
+            pass  # 清除邏輯已在 /api/flac/pause 和 done SSE 後的 JS 處理
 
     return Response(
         stream_with_context(generate()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+_STATE_FILES = {
+    "flac":  FLAC_UPGRADE_STATE,
+    "dedup": DEDUP_STATE,
+    "check": CHECK_STATE,
+}
+
+
+@music_bp.route("/api/op/<op_key>/pause", methods=["POST"])
+@music_auth_required
+def op_pause(op_key: str):
+    """記錄暫停點並終止對應 SSH 進程。op_key: flac / dedup / check"""
+    if op_key not in _STATE_FILES:
+        return jsonify({"error": "unknown op"}), 400
+    data    = request.json or {}
+    current = data.get("current", 0)
+    total   = data.get("total", 0)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state = {
+        "paused_at":   current,
+        "total":       total,
+        "paused_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "op":          op_key,
+    }
+    _STATE_FILES[op_key].write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _kill_proc(op_key)
+    return jsonify({"ok": True, "state": state})
+
+
+@music_bp.route("/api/op/<op_key>/stop", methods=["POST"])
+@music_auth_required
+def op_stop(op_key: str):
+    """終止 SSH 進程，不記錄暫停點。"""
+    if op_key not in _STATE_FILES:
+        return jsonify({"error": "unknown op"}), 400
+    _kill_proc(op_key)
+    return jsonify({"ok": True})
+
+
+@music_bp.route("/api/op/<op_key>/state")
+@music_auth_required
+def op_state(op_key: str):
+    """回傳上次暫停狀態，沒有則回傳 null。"""
+    if op_key not in _STATE_FILES:
+        return jsonify({"error": "unknown op"}), 400
+    f = _STATE_FILES[op_key]
+    if f.exists():
+        try:
+            return jsonify(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return jsonify(None)
