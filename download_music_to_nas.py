@@ -474,9 +474,7 @@ def download_apple_music(url: str, temp_dir: Path) -> subprocess.CompletedProces
     return run(
         [str(VENV_BIN / "gamdl"), "--no-config-file", url,
          "-c", str(COOKIES), "-o", str(temp_dir),
-         "--download-mode", "ytdlp", "--use-wrapper",
-         "--wrapper-decrypt-ip", "127.0.0.1:10020",
-         "--wrapper-account-url", "http://127.0.0.1:30020",
+         "--download-mode", "ytdlp",
          "--temp-path", str(temp_dir), "--overwrite",
          "--song-codec-priority", "alac,aac-he,aac"],
         timeout=2400,
